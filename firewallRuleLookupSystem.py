@@ -75,8 +75,6 @@ def fetchTemplateInfo(pano):
             logging.info(f"No Aggregate Interfaces Found for Template '{template}', Vsys '{vsys}'")
 
 
-
-#TODO: Finish implementation and figure out how to get missing rule types included
 def fetchAllPreRulebaseRules(deviceGroup):
     #Still cannot get QoS, DoS, NetworkPacketBroker, TunnelInspection, or SD-WAN rules (not in panos.policies)
     ruleTypes = [
@@ -103,6 +101,9 @@ def fetchAllPreRulebaseRules(deviceGroup):
         #add an entry to allRules that has ruleType.name as key, with refresshed rules as values
         allRules[ruleName] = rules
     return allRules
+
+#TODO: Logic for correlating rules to their respective zones, interfaces, and address objects
+#now have a dictionary of all rules per device group, need to correlate them next
     
 
 main()
