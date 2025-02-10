@@ -13,6 +13,7 @@ def main():
     load_dotenv()
     apiKey = os.environ.get('API_KEY')
     panAddress = os.environ.get('PAN_ADDRESS')
+
     logging.basicConfig(level=logging.DEBUG)
 
     pano = Panorama(panAddress, api_key=apiKey)
@@ -26,7 +27,7 @@ def main():
     addressObject = AddressObject.refreshall(pano)
     #get all address groups
     addressGroup = AddressGroup.refreshall(pano)
-
+    fetchDeviceGroupInfo(pano)
     #Address Objects are missing 11 total objects, because they are held in a different location
     #than the rest of them. A couple in IC-Perimeter and the rest in IC-Datacenter.
     #TODO: Find out how to access the objects in these non-default locations
@@ -37,20 +38,11 @@ def fetchDeviceGroupInfo(pano):
     #Find and refresh all dev groups
     logging.info("Retrieving and Refreshing Device Groups...")
     deviceGroups = DeviceGroup.refreshall(pano)
-
+    ruleMap = {}
     for dg in deviceGroups: 
-        # #Since the pano objects are heirarchical, grab the rules for each dg in teh loop
-        # #TODO ALSO NEED POSTRULEBASE?
-        # rulebase = dg.find("PreRulebase")
-        # #Handling dgs without rulebases. TODO: Creating one and adding for now, unsure if it should stay like that.
-        # if rulebase is None:
-        #     rulebase = PreRulebase()
-        #     dg.add(rulebase)
-        fetchAllPreRulebaseRules(dg)
+        logging.info(f"Retrieving Device Group '{dg.name}' Rules")
+        ruleMap[dg.name] = fetchAllPreRulebaseRules(dg)
 
-        # #get specifically just Security PreRulebase for now
-        # rules = SecurityRule.refreshall(rulebase)
-        # logging.info("Device Group '%s' Has %d Security Rules", dg.name, len(rules))
 
 def fetchTemplateInfo(pano):
     logging.info("Retrieving and Refreshing Templates")
@@ -110,6 +102,7 @@ def fetchAllPreRulebaseRules(deviceGroup):
         rules = ruleType.refreshall(prerulebase)
         #add an entry to allRules that has ruleType.name as key, with refresshed rules as values
         allRules[ruleName] = rules
+    return allRules
     
 
 main()
