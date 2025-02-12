@@ -2,7 +2,7 @@ import logging
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.firewall import Firewall
 from panos.policies import PreRulebase, SecurityRule, NatRule, ApplicationOverride, PolicyBasedForwarding, DecryptionRule, AuthenticationRule
-from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface
+from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface, Layer3Subinterface
 from panos.device import Vsys
 from panos.objects import AddressGroup, AddressObject
 from dotenv import load_dotenv
@@ -39,9 +39,10 @@ def fetchDeviceGroupInfo(pano):
     logging.info("Retrieving and Refreshing Device Groups...")
     deviceGroups = DeviceGroup.refreshall(pano)
     ruleMap = {}
-    for dg in deviceGroups: 
-        logging.info(f"Retrieving Device Group '{dg.name}' Rules")
-        ruleMap[dg.name] = fetchAllPreRulebaseRules(dg)
+    # for dg in deviceGroups: 
+    #     logging.info(f"Retrieving Device Group '{dg.name}' Rules")
+    #     ruleMap[dg.name] = fetchAllPreRulebaseRules(dg)
+    fetchTemplateInfo(pano)
 
 
 def fetchTemplateInfo(pano):
@@ -73,7 +74,10 @@ def fetchTemplateInfo(pano):
             logging.info(f"     {len(aggInterfaces)} Aggregate Interfaces Found for Template '{template}', Vsys '{vsys}'")
         else:
             logging.info(f"No Aggregate Interfaces Found for Template '{template}', Vsys '{vsys}'")
-
+        for aggInterface in aggInterfaces:
+            subInterfaces = getChildrenOfAggInterface(aggInterface)
+            vlanMap = getAddressForVLANS(subInterfaces)
+            print(f"VLAN Mappings for aggInterface {aggInterface}:\n{vlanMap}")
 
 def fetchAllPreRulebaseRules(deviceGroup):
     #Still cannot get QoS, DoS, NetworkPacketBroker, TunnelInspection, or SD-WAN rules (not in panos.policies)
@@ -106,7 +110,30 @@ def fetchAllPreRulebaseRules(deviceGroup):
 #now have a dictionary of all rules per device group, need to correlate them next
 
 #TODO get the VLAN, AddressGroup, Zone, and Interface for each addressObject
+#Correlating methods below
+def correlateAddressToZone(addressObject):
+    pass
 
-    
+def correlateAddressToVLAN(addressObject):
+    pass
 
+def correlateAddressToInterface(addressObject):
+    pass
+
+def correlateAddressToAddressGroup(addressObject):
+    pass
+
+def getChildrenOfAggInterface(aggInterface):
+    #TODO:Be sure to eventually account for other interface types (Layer2, virtual-wire, tap, ha)
+    subInterfaces = aggInterface.findall(Layer3Subinterface)
+    return subInterfaces
+
+def getAddressForVLANS(subinterfaceList):
+    interfaceMap = {}
+    for subinterface in subinterfaceList:
+        #grab the second half of the interface name, which is the VLANs number
+        vlanNum = subinterface.name.split(".")[1]
+        vlanIP = subinterface.ip
+        interfaceMap[vlanNum] = vlanIP
+    return interfaceMap
 main()
