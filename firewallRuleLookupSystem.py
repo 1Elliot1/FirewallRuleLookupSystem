@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 import os
 
 def main():
-    #TODO: Place API key and IP into secure location later
     load_dotenv()
     apiKey = os.environ.get('API_KEY')
     panAddress = os.environ.get('PAN_ADDRESS')
@@ -28,6 +27,7 @@ def main():
     #get all address groups
     addressGroup = AddressGroup.refreshall(pano)
     fetchDeviceGroupInfo(pano)
+
     #Address Objects are missing 11 total objects, because they are held in a different location
     #than the rest of them. A couple in IC-Perimeter and the rest in IC-Datacenter.
     #TODO: Find out how to access the objects in these non-default locations
@@ -104,6 +104,9 @@ def fetchAllPreRulebaseRules(deviceGroup):
 
 #TODO: Logic for correlating rules to their respective zones, interfaces, and address objects
 #now have a dictionary of all rules per device group, need to correlate them next
+
+#TODO get the VLAN, AddressGroup, Zone, and Interface for each addressObject
+
     
 
 main()
