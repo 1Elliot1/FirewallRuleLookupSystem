@@ -120,7 +120,7 @@ class PanoramaData:
         Check if an IP address is within a CIDR range
         """
         try:
-            temp = cidr.split("'")[1]
+            temp = cidr.strip("'[]")
             resultIP = ipaddress.ip_address(ip) in ipaddress.ip_network(temp, strict = False)
             return resultIP
         except ValueError:
