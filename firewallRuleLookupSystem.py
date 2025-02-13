@@ -2,10 +2,11 @@ import logging
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.firewall import Firewall
 from panos.policies import PreRulebase, SecurityRule, NatRule, ApplicationOverride, PolicyBasedForwarding, DecryptionRule, AuthenticationRule
-from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface, Layer3Subinterface
+from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface, Layer3Subinterface, Interface
 from panos.device import Vsys
 from panos.objects import AddressGroup, AddressObject
 from dotenv import load_dotenv
+import ipaddress
 import os
 
 def main():
@@ -39,10 +40,10 @@ def fetchDeviceGroupInfo(pano):
     logging.info("Retrieving and Refreshing Device Groups...")
     deviceGroups = DeviceGroup.refreshall(pano)
     ruleMap = {}
-    # for dg in deviceGroups: 
-    #     logging.info(f"Retrieving Device Group '{dg.name}' Rules")
-    #     ruleMap[dg.name] = fetchAllPreRulebaseRules(dg)
-    fetchTemplateInfo(pano)
+    for dg in deviceGroups: 
+        logging.info(f"Retrieving Device Group '{dg.name}' Rules")
+        ruleMap[dg.name] = fetchAllPreRulebaseRules(dg)
+    
 
 
 def fetchTemplateInfo(pano):
@@ -54,7 +55,7 @@ def fetchTemplateInfo(pano):
     for template in templates:
         #Get all vsys' per template
         vsysList = template.findall(Vsys)
-
+        zones = []
         for vsys in vsysList:
             #Find all zones per vsys
             zones = vsys.findall(Zone)
@@ -77,7 +78,11 @@ def fetchTemplateInfo(pano):
         for aggInterface in aggInterfaces:
             subInterfaces = getChildrenOfAggInterface(aggInterface)
             vlanMap = getAddressForVLANS(subInterfaces)
-            print(f"VLAN Mappings for aggInterface {aggInterface}:\n{vlanMap}")
+        #Do this for every addressObject 
+            addressObjectVlanNum = correlateAddressToVLAN(addressObject, vlanMap)
+            addressObjectZone = correlateVLANToZone(zones, addressObjectVlanNum)
+            addressObjectAddressGroup = correlateAddressToAddressGroup(addressObject, addressGroups)
+            print(f"Address Object: {addressObject.name} is in VLAN {addressObjectVlanNum}, Zone {addressObjectZone}, and Address Group {addressObjectAddressGroup}")
 
 def fetchAllPreRulebaseRules(deviceGroup):
     #Still cannot get QoS, DoS, NetworkPacketBroker, TunnelInspection, or SD-WAN rules (not in panos.policies)
@@ -111,17 +116,32 @@ def fetchAllPreRulebaseRules(deviceGroup):
 
 #TODO get the VLAN, AddressGroup, Zone, and Interface for each addressObject
 #Correlating methods below
-def correlateAddressToZone(addressObject):
-    pass
+def ipInCidr(ip, cidr):
+    return ipaddress.ip_address(ip) in ipaddress.ip_network(cidr)
 
-def correlateAddressToVLAN(addressObject):
-    pass
+def correlateVLANToZone(zoneList, addressVlan):
+    for zone in zoneList:
+        zoneVlans = zone.findall(Interface)
+        for zoneVlan in zoneVlans:
+            zoneVlanNum = zoneVlan.name.split(".")[1]
+            if zoneVlanNum == addressVlan:
+                return zone.name
+    return "NA"
 
-def correlateAddressToInterface(addressObject):
-    pass
+def correlateAddressToVLAN(addressObject, vlanDict):
+    #check if ip is within cidr range of the VLAN IP. (Returned by the getAddressForVLANS method)
+    for vlanNum, vlanIP in vlanDict.items():
+        if ipInCidr(addressObject.value, vlanIP):
+            return vlanNum
+    return "NA"
 
-def correlateAddressToAddressGroup(addressObject):
-    pass
+def correlateAddressToAddressGroup(addressObject, addressGroups):
+    #Unsure if the addressGroup ip is a name or ip
+    for addressGroup in addressGroups:
+        for address in addressGroup.static_value:
+            if addressObject.name == address or addressObject.value == address:
+                return addressGroup.name
+    return "NA"
 
 def getChildrenOfAggInterface(aggInterface):
     #TODO:Be sure to eventually account for other interface types (Layer2, virtual-wire, tap, ha)
@@ -136,4 +156,5 @@ def getAddressForVLANS(subinterfaceList):
         vlanIP = subinterface.ip
         interfaceMap[vlanNum] = vlanIP
     return interfaceMap
+
 main()
