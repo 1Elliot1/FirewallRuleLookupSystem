@@ -38,14 +38,14 @@ class PanoramaData:
         Refresh rules for each device group
         """
         for dg in self.deviceGroups:
-            logging.info(f"Retrieving Device Group '{dg.name} Rules")
+            #logging.info(f"Retrieving Device Group '{dg.name} Rules")
             self.deviceGroupRules[dg.name] = self.fetchAllPrerulebaseRules(dg)
 
     def fetchAllPrerulebaseRules(self, deviceGroup):
         """
         Return a dictionary of rule types for the given device group
         """
-        #Still cannot get QoS, DoS, NetworkPacketBroker, TunnelInspection, or SD-WAN rules (not in panos.policies)
+        #Still cannot get QoS, DoS, NetworkPacketBroker, -TunnelInspection, or -SD-WAN rules (not in panos.policies)
         ruleTypes = [
             SecurityRule,
             NatRule, 
@@ -120,7 +120,9 @@ class PanoramaData:
         Check if an IP address is within a CIDR range
         """
         try:
-            return ipaddress.ip_address(ip) in ipaddress.ip_network(cidr, strict = False)
+            temp = cidr.split("'")[1]
+            resultIP = ipaddress.ip_address(ip) in ipaddress.ip_network(temp, strict = False)
+            return resultIP
         except ValueError:
             return False
 
@@ -128,8 +130,9 @@ class PanoramaData:
         """
         Given an address object and VLAN map (VlanNum -> cidr), return the VLAN number if found
         """
+        cleanIp = addressObject.value.split("/")[0]
         for vlanNum, vlanCidr in vlanMap.items():
-            if self.ipInCidr(addressObject.value, vlanCidr):
+            if self.ipInCidr(cleanIp, str(vlanCidr)):
                 return vlanNum
         return None
     
@@ -139,11 +142,12 @@ class PanoramaData:
         Given a VLAN number and a list of zones, try to correlate VLAN to a zone
         TODO: GRAB VLAN NAMES AND INTERFACES CORRECTLY 
         """
+        #Issue with this is that zones are not how you get the sub interfaces, templates are
         for zone in zones:
-            zoneSubinterfaces = zone.findall(Layer3Subinterface)
+            zoneSubinterfaces = zone.interface
             for interface in zoneSubinterfaces:
                 try:
-                    interfaceVlan = interface.name.split(".")[1]
+                    interfaceVlan = interface.split(".")[1]
                     if interfaceVlan == vlanNum:
                         return zone.name
                 except IndexError:
@@ -167,7 +171,12 @@ class PanoramaData:
         given an IP address (String), find its associated AddressObject, VLAN, Zone, AddressGroup, and DeviceGroup rules
         """
         #find matching addressObject for the given IP
-        matchedObject = next((obj for obj in self.addressObjects if obj.value == ip), None)
+        matchedObject = None
+        for obj in self.addressObjects:
+            if obj.value == ip:
+                matchedObject = obj
+                break
+        #matchedObject = next((obj for obj in self.addressObjects if obj.value == ip), None)
         if not matchedObject:
             logging.error(f"No AddressObject found for IP: {ip}")
             return None
@@ -177,10 +186,11 @@ class PanoramaData:
             "addressObject": matchedObject.name,
             "vlan": None,
             "zone": None,
-            "addressGroup": None,
-            "deviceGroupRules": {} #can be further filtered based on context
+            "addressGroup": None
+            #"deviceGroupRules": {} #can be further filtered based on context
         }
-
+#application and application groups
+#services and service groups
         #check each vlanData bucket until a matching VLAN is found
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
@@ -200,7 +210,7 @@ class PanoramaData:
         #Device group rules can be refined further
         #For now,including all device group rules as starting point
         #TODO: Figure out what you need to do with that
-        correlationResult["deviceGroupRules"] = self.deviceGroupRules
+        #correlationResult["deviceGroupRules"] = self.deviceGroupRules
 
         return correlationResult
 
@@ -231,9 +241,9 @@ def main():
     testIP = ""
     result = panData.correlateIP(testIP)
     if result:
-        logging.info(f"Correlation Result for IP: {testIP}\n{result}")
+       logging.info(f"Correlation Result for IP: {testIP}\n{result}")
     else:
-        logging.error(f"No correlation result found for IP: {testIP}")
+       logging.error(f"No correlation result found for IP: {testIP}")
 
 if __name__ == "__main__":
     main()
