@@ -39,7 +39,7 @@ class PanoramaData:
         """
         for dg in self.deviceGroups:
             logging.info(f"Retrieving Device Group '{dg.name} Rules")
-            self.deviceGroupRules[dg.name] = fetchAllPreRulebaseRules(dg)
+            self.deviceGroupRules[dg.name] = self.fetchAllPrerulebaseRules(dg)
 
     def fetchAllPrerulebaseRules(self, deviceGroup):
         """
@@ -75,7 +75,7 @@ class PanoramaData:
         For every template (and its vsys), grab associated zones and VLAN mappings
         Using aggregate interfaces and their subinterfaces
         """
-        for template in self.tempaltes:
+        for template in self.templates:
             vsysList = template.findall(Vsys)
             for vsys in vsysList:
                 zones = vsys.findall(Zone)
@@ -83,7 +83,8 @@ class PanoramaData:
                 for aggInterface in aggInterfaces:
                     subInterface = self.getChildrenOfAggInterface(aggInterface)
                     vlanMap = self.getAddressForVLANS(subInterface)
-                    
+
+                    #TODO:Better way to store them. Dont think this key will work
                     key = f"{template.name}-{vsys.name}"
                     if key not in self.vlanData:
                         self.vlanData[key] = {"vlanMap": vlanMap, "zones": zones}
@@ -139,8 +140,8 @@ class PanoramaData:
         TODO: GRAB VLAN NAMES AND INTERFACES CORRECTLY 
         """
         for zone in zones:
-            zoneInterfaces = zone.findall(Interface)
-            for interface in zoneInterfaces:
+            zoneSubinterfaces = zone.findall(Layer3Subinterface)
+            for interface in zoneSubinterfaces:
                 try:
                     interfaceVlan = interface.name.split(".")[1]
                     if interfaceVlan == vlanNum:
@@ -161,6 +162,7 @@ class PanoramaData:
         return None
 
     def correlateIP(self, ip):
+        #TODO: Doesn't seem to be correlating IP Objects together correctly yet. Match on value or name? 
         """
         given an IP address (String), find its associated AddressObject, VLAN, Zone, AddressGroup, and DeviceGroup rules
         """
