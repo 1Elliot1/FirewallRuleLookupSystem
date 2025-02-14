@@ -4,7 +4,7 @@ from panos.firewall import Firewall
 from panos.policies import PreRulebase, SecurityRule, NatRule, ApplicationOverride, PolicyBasedForwarding, DecryptionRule, AuthenticationRule
 from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface, Layer3Subinterface, Interface
 from panos.device import Vsys
-from panos.objects import AddressGroup, AddressObject
+from panos.objects import AddressGroup, AddressObject, ServiceObject, ServiceGroup, ApplicationGroup, ApplicationObject
 from dotenv import load_dotenv
 import ipaddress
 import os
@@ -26,6 +26,10 @@ class PanoramaData:
         self.addressGroups = AddressGroup.refreshall(pano)
         self.deviceGroups = DeviceGroup.refreshall(pano)
         self.templates = Template.refreshall(pano)
+        # self.serviceObjects = ServiceObject.refreshall(pano)
+        # self.serviceGroups = ServiceGroup.refreshall(pano)
+        # self.ApplicationObject = ApplicationObject.refreshall(pano)
+        # self.ApplicationGroup = ApplicationGroup.refreshall(pano)
 
         self.deviceGroupRules = {}
         self.vlanData = {}
@@ -206,7 +210,7 @@ class PanoramaData:
         addressGroup = self.correlateAddressToAddressGroup(matchedObject)
         if addressGroup:
             correlationResult["addressGroup"] = addressGroup
-        
+
         #Device group rules can be refined further
         #For now,including all device group rules as starting point
         #TODO: Figure out what you need to do with that
