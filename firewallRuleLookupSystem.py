@@ -4,7 +4,8 @@ from panos.firewall import Firewall
 from panos.policies import PreRulebase, SecurityRule, NatRule, ApplicationOverride, PolicyBasedForwarding, DecryptionRule, AuthenticationRule
 from panos.network import Vlan, Zone, EthernetInterface, AggregateInterface, Layer3Subinterface, Interface
 from panos.device import Vsys
-from panos.objects import AddressGroup, AddressObject, ServiceObject, ServiceGroup, ApplicationGroup, ApplicationObject
+from panos.objects import AddressGroup, AddressObject, ServiceObject, ServiceGroup, ApplicationGroup, ApplicationObject, ApplicationContainer
+from panos.predefined import Predefined
 from dotenv import load_dotenv
 import ipaddress
 import os
@@ -26,10 +27,21 @@ class PanoramaData:
         self.addressGroups = AddressGroup.refreshall(pano)
         self.deviceGroups = DeviceGroup.refreshall(pano)
         self.templates = Template.refreshall(pano)
-        # self.serviceObjects = ServiceObject.refreshall(pano)
-        # self.serviceGroups = ServiceGroup.refreshall(pano)
-        # self.ApplicationObject = ApplicationObject.refreshall(pano)
-        # self.ApplicationGroup = ApplicationGroup.refreshall(pano)
+        self.applicationObject = ApplicationObject.refreshall(pano)
+        self.applicationGroup = ApplicationGroup.refreshall(pano)
+        self.applicationContainers = ApplicationContainer.refreshall(pano)
+        self.serviceObjects = ServiceObject.refreshall(pano)
+        self.serviceGroups = ServiceGroup.refreshall(pano)
+        self.predefined = Predefined(pano)
+        self.predefined.refreshall_applications()
+        self.predefined.refreshall_services()
+        #Represents a map of application name: application object
+        #'windows-azure-base': <ApplicationObject windows-azure-base 0x2c099c4c3d0>
+        self.predefinedApplicationObjects = self.predefined.application_objects
+        self.predefinedObjectContainers = self.predefined.application_container_objects
+        #holds two objects, there are only 2 services with location set to predefined in panorama UI
+        self.predefinedServiceObjects = self.predefined.service_objects
+        #self.predefinedServiceGroups = self.predefined.service_groups
 
         self.deviceGroupRules = {}
         self.vlanData = {}
@@ -218,6 +230,13 @@ class PanoramaData:
 
         return correlationResult
 
+def correlateApplications():
+    #TODO: Correlate applications to their respective udp/tcp ports
+    pass
+
+def correlateServices():
+    #TODO: Correlate services to their respective udp/tcp ports
+    pass
 
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
@@ -235,7 +254,7 @@ def main():
     
     #Get managed devices
     logging.info("Refreshing Managed Devices...")
-    devices = pano.refresh_devices()
+    devices = pano.refresh_devices()    
     logging.info("Found %d Managed Devices", len(devices))
 
     #build PanoramaData object
@@ -243,11 +262,11 @@ def main():
 
     #Test Example:
     testIP = ""
-    result = panData.correlateIP(testIP)
-    if result:
-       logging.info(f"Correlation Result for IP: {testIP}\n{result}")
-    else:
-       logging.error(f"No correlation result found for IP: {testIP}")
+    #result = panData.correlateIP(testIP)
+    # if result:
+    #    logging.info(f"Correlation Result for IP: {testIP}\n{result}")
+    # else:
+    #    logging.error(f"No correlation result found for IP: {testIP}")
 
 if __name__ == "__main__":
     main()
