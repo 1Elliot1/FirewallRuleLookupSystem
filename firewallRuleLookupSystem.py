@@ -160,14 +160,17 @@ class PanoramaData:
         """
         #Issue with this is that zones are not how you get the sub interfaces, templates are
         for zone in zones:
+            print(f"Zone: {zone.name}")
             zoneSubinterfaces = zone.interface
             for interface in zoneSubinterfaces:
                 try:
-                    interfaceVlan = interface.split(".")[1]
-                    if interfaceVlan == vlanNum:
-                        return zone.name
+                    print(f"Interface: {interface}")
+                    if "." in interface:
+                        interfaceVlan = interface.split(".")[1]
+                        if interfaceVlan == vlanNum:
+                            return zone.name
                 except IndexError:
-                    logging.error(f"Error parsing VLAN number from interface name: {interface.name}")
+                    logging.error(f"Error parsing VLAN number from interface name: {interface}")
                     continue 
         return None
 
@@ -182,7 +185,6 @@ class PanoramaData:
         return None
 
     def correlateIP(self, ip):
-        #TODO: Doesn't seem to be correlating IP Objects together correctly yet. Match on value or name? 
         """
         given an IP address (String), find its associated AddressObject, VLAN, Zone, AddressGroup, and DeviceGroup rules
         """
@@ -202,11 +204,10 @@ class PanoramaData:
             "addressObject": matchedObject.name,
             "vlan": None,
             "zone": None,
-            "addressGroup": None
-            #"deviceGroupRules": {} #can be further filtered based on context
+            "addressGroup": None,
+            "matchingRules": []
         }
-#application and application groups
-#services and service groups
+
         #check each vlanData bucket until a matching VLAN is found
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
@@ -219,16 +220,14 @@ class PanoramaData:
                 break #stop searching once a match is found
 
         #Correlate the AddressObject to an AddressGroup
-        addressGroup = self.correlateAddressToAddressGroup(matchedObject)
-        if addressGroup:
-            correlationResult["addressGroup"] = addressGroup
+        correlationResult["addressGroup"] = self.correlateAddressToAddressGroup(matchedObject)
 
-        #Device group rules can be refined further
-        #For now,including all device group rules as starting point
-        #TODO: Figure out what you need to do with that
-        #correlationResult["deviceGroupRules"] = self.deviceGroupRules
+        #correlationResult["matchingRules"] = self.findMatchingRules(matchedObject, correlationResult["zone"])
 
         return correlationResult
+
+# def findMatchingRules(addressObject, zone):
+#     return "NULL"
 
 def correlateApplications():
     #TODO: Correlate applications to their respective udp/tcp ports
@@ -262,11 +261,13 @@ def main():
 
     #Test Example:
     testIP = ""
-    #result = panData.correlateIP(testIP)
-    # if result:
-    #    logging.info(f"Correlation Result for IP: {testIP}\n{result}")
-    # else:
-    #    logging.error(f"No correlation result found for IP: {testIP}")
+    result = panData.correlateIP(testIP)
+    if result:
+       logging.info(f"Correlation Result for IP: {testIP}\n{result}")
+    else:
+       logging.error(f"No correlation result found for IP: {testIP}")
 
 if __name__ == "__main__":
     main()
+
+
