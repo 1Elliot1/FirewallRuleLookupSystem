@@ -160,11 +160,9 @@ class PanoramaData:
         """
         #Issue with this is that zones are not how you get the sub interfaces, templates are
         for zone in zones:
-            print(f"Zone: {zone.name}")
             zoneSubinterfaces = zone.interface
             for interface in zoneSubinterfaces:
                 try:
-                    print(f"Interface: {interface}")
                     if "." in interface:
                         interfaceVlan = interface.split(".")[1]
                         if interfaceVlan == vlanNum:
@@ -226,8 +224,41 @@ class PanoramaData:
 
         return correlationResult
 
-# def findMatchingRules(addressObject, zone):
-#     return "NULL"
+def lookupRulesByAddressObject(self, addressObject, zone):
+    matchingRules = []
+
+    for dg, ruleTypes in self.deviceGroupRules.items():
+        for ruleType, rules in ruleTypes.items():
+            for rule in rules:
+                if hasattr(rule, "source"):
+                    if addressObject.name in rule.source:
+                        matchingRules.append({
+                            "deviceGroup": dg,
+                            "ruleType": ruleType,
+                            "ruleName": rule.name,
+                            "source": rule.source,
+                            "destination": rule.destination,
+                        })
+                if hasattr(rule, "destination"):
+                    if addressObject.name in rule.destination:
+                        matchingRules.append({
+                            "deviceGroup": dg,
+                            "ruleType": ruleType,
+                            "ruleName": rule.name,
+                            "zone": zone
+                        })
+    pass
+
+def lookupRulesBySubnet(self, subnet):
+    pass
+
+def lookupRulesByApplication(self, applicationName):
+    pass
+
+def lookupRulesByZone(self, zone):
+    pass
+
+
 
 def correlateApplications():
     #TODO: Correlate applications to their respective udp/tcp ports
