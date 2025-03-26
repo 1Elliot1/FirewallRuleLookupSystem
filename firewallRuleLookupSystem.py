@@ -48,6 +48,7 @@ class PanoramaData:
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
+        print(self.vlanData)
 
     def collectDeviceGroupRules(self):
         """
@@ -225,28 +226,28 @@ class PanoramaData:
         return correlationResult
 
 def lookupRulesByAddressObject(self, addressObject, zone):
-    matchingRules = []
+    # matchingRules = []
 
-    for dg, ruleTypes in self.deviceGroupRules.items():
-        for ruleType, rules in ruleTypes.items():
-            for rule in rules:
-                if hasattr(rule, "source"):
-                    if addressObject.name in rule.source:
-                        matchingRules.append({
-                            "deviceGroup": dg,
-                            "ruleType": ruleType,
-                            "ruleName": rule.name,
-                            "source": rule.source,
-                            "destination": rule.destination,
-                        })
-                if hasattr(rule, "destination"):
-                    if addressObject.name in rule.destination:
-                        matchingRules.append({
-                            "deviceGroup": dg,
-                            "ruleType": ruleType,
-                            "ruleName": rule.name,
-                            "zone": zone
-                        })
+    # for dg, ruleTypes in self.deviceGroupRules.items():
+    #     for ruleType, rules in ruleTypes.items():
+    #         for rule in rules:
+    #             if hasattr(rule, "source"):
+    #                 if addressObject.name in rule.source:
+    #                     matchingRules.append({
+    #                         "deviceGroup": dg,
+    #                         "ruleType": ruleType,
+    #                         "ruleName": rule.name,
+    #                         "source": rule.source,
+    #                         "destination": rule.destination,
+    #                     })
+    #             if hasattr(rule, "destination"):
+    #                 if addressObject.name in rule.destination:
+    #                     matchingRules.append({
+    #                         "deviceGroup": dg,
+    #                         "ruleType": ruleType,
+    #                         "ruleName": rule.name,
+    #                         "zone": zone
+    #                     })
     pass
 
 def lookupRulesBySubnet(self, subnet):
@@ -266,6 +267,11 @@ def correlateApplications():
 
 def correlateServices():
     #TODO: Correlate services to their respective udp/tcp ports
+    pass
+
+def testMethods(panData):
+    #MAKE A TEST FUNCTION THAT MAKES LIMITED CALLS TO THE PANORAMA API
+    #Select 1 device group, 1 rule type, and fetch all of that rule type for sec rule
     pass
 
 def main():
@@ -291,12 +297,12 @@ def main():
     panData = PanoramaData(pano)
 
     #Test Example:
-    testIP = ""
-    result = panData.correlateIP(testIP)
-    if result:
-       logging.info(f"Correlation Result for IP: {testIP}\n{result}")
-    else:
-       logging.error(f"No correlation result found for IP: {testIP}")
+    # testIP = ""
+    # result = panData.correlateIP(testIP)
+    # if result:
+    #    logging.info(f"Correlation Result for IP: {testIP}\n{result}")
+    # else:
+    #    logging.error(f"No correlation result found for IP: {testIP}")
 
 if __name__ == "__main__":
     main()
