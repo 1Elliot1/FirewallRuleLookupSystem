@@ -48,7 +48,6 @@ class PanoramaData:
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
-        print(self.vlanData)
 
     def collectDeviceGroupRules(self):
         """
@@ -60,12 +59,12 @@ class PanoramaData:
 
     def fetchAllPrerulebaseRules(self, deviceGroup):
         """
-        Return a dictionary of rule types for the given device group
+        Return a dictionary of rule types for the given device group.
+        Note: Some rule types (QoS, DoS, etc.) are not available in panos.policies.
         """
-        #Still cannot get QoS, DoS, NetworkPacketBroker, -TunnelInspection, or -SD-WAN rules (not in panos.policies)
         ruleTypes = [
             SecurityRule,
-            NatRule, 
+            NatRule,
             ApplicationOverride,
             PolicyBasedForwarding,
             DecryptionRule,
@@ -111,16 +110,16 @@ class PanoramaData:
     @staticmethod
     def getChildrenOfAggInterface(aggInterface):
         """
-        Return subinterfaces for an aggregate interface. 
-        TODO: currently only supporting Layer3Subinterfaces
+        Return subinterfaces for an aggregate interface.
+        Note: Currently only supports Layer3Subinterfaces.
         """
         return aggInterface.findall(Layer3Subinterface)
 
     @staticmethod
     def getAddressForVLANS(subinterfaceList):
         """
-        Create mapping of VLAN numbers ot their associated IP ranges
-        Assumes that the second half of subinterface name, preceeded by a period is vlan num
+        Create a mapping of VLAN numbers to their associated IP ranges.
+        Assumes the subinterface name format is: <name>.<vlan_number>
         """
         interfaceMap = {}
         for subinterface in subinterfaceList:
@@ -134,7 +133,7 @@ class PanoramaData:
     @staticmethod
     def ipInCidr(ip, cidr):
         """
-        Check if an IP address is within a CIDR range
+        Check if an IP address is within a given CIDR range
         """
         try:
             temp = cidr.strip("'[]")
@@ -145,7 +144,8 @@ class PanoramaData:
 
     def correlateAddressToVlan(self, addressObject, vlanMap):
         """
-        Given an address object and VLAN map (VlanNum -> cidr), return the VLAN number if found
+        Given an address object and a VLAN map (vlanNum -> CIDR),
+        return the VLAN number if the object's IP falls within a range.
         """
         cleanIp = addressObject.value.split("/")[0]
         for vlanNum, vlanCidr in vlanMap.items():
@@ -156,8 +156,8 @@ class PanoramaData:
     @staticmethod
     def correlateVlanToZone(vlanNum, zones):
         """
-        Given a VLAN number and a list of zones, try to correlate VLAN to a zone
-        TODO: GRAB VLAN NAMES AND INTERFACES CORRECTLY 
+        Given a VLAN number and a list of zones, correlate the VLAN to a zone.
+        TODO: Enhance logic to better match VLAN names/interfaces.
         """
         #Issue with this is that zones are not how you get the sub interfaces, templates are
         for zone in zones:
@@ -185,7 +185,8 @@ class PanoramaData:
 
     def correlateIP(self, ip):
         """
-        given an IP address (String), find its associated AddressObject, VLAN, Zone, AddressGroup, and DeviceGroup rules
+        Given an IP address (string), find its associated AddressObject,
+        VLAN, Zone, and AddressGroup.
         """
         #find matching addressObject for the given IP
         matchedObject = None
@@ -205,6 +206,8 @@ class PanoramaData:
             "zone": None,
             "addressGroup": None,
             "matchingRules": []
+            #"applications": None,
+            #"services": None
         }
 
         #check each vlanData bucket until a matching VLAN is found
@@ -225,54 +228,184 @@ class PanoramaData:
 
         return correlationResult
 
-def lookupRulesByAddressObject(self, addressObject, zone):
-    # matchingRules = []
+    # --- Correlating Objects Logic Ends Here ---
+    # --- !!! Rule Lookup Methods Start Here !!! ---
 
-    # for dg, ruleTypes in self.deviceGroupRules.items():
-    #     for ruleType, rules in ruleTypes.items():
-    #         for rule in rules:
-    #             if hasattr(rule, "source"):
-    #                 if addressObject.name in rule.source:
-    #                     matchingRules.append({
-    #                         "deviceGroup": dg,
-    #                         "ruleType": ruleType,
-    #                         "ruleName": rule.name,
-    #                         "source": rule.source,
-    #                         "destination": rule.destination,
-    #                     })
-    #             if hasattr(rule, "destination"):
-    #                 if addressObject.name in rule.destination:
-    #                     matchingRules.append({
-    #                         "deviceGroup": dg,
-    #                         "ruleType": ruleType,
-    #                         "ruleName": rule.name,
-    #                         "zone": zone
-    #                     })
-    pass
+    def correlateInput(self, input_value):
+        """
+        Determine the type of input and perform correlation.
+        Currently, assumes input_value is an IP address.
+        """
+        try:
+            ipaddress.ip_address(input_value)
+            correlationResult = self.correlateIP(input_value)
+        except ValueError:
+            logging.error("Input value is not a valid IP address: %s", input_value)
+            return None
+        return correlationResult
 
-def lookupRulesBySubnet(self, subnet):
-    pass
+    def correlateApplications(self, correlationResult):
+        """
+        Correlate applications to the input.
+        TODO: Implement application correlation logic (e.g., based on UDP/TCP ports).
+        """
+        correlationResult["applications"] = []  # Placeholder for matched applications.
+        return correlationResult
 
-def lookupRulesByApplication(self, applicationName):
-    pass
+    def correlateServices(self, correlationResult):
+        """
+        Correlate services to the input.
+        TODO: Implement service correlation logic (e.g., based on UDP/TCP ports).
+        """
+        correlationResult["services"] = []  # Placeholder for matched services.
+        return correlationResult
 
-def lookupRulesByZone(self, zone):
-    pass
+    def ruleImpactsCorrelation(self, rule, correlationResult):
+        """
+        Check if a given rule impacts the input based on the correlation result.
+        This example checks if the address object or address group appears in the rule's source or destination.
+        Extend with VLAN, zone, application, or service checks as needed.
+        """
+        if correlationResult["addressObject"]:
+            if correlationResult["addressObject"] in getattr(rule, "source", []):
+                return True
+            if correlationResult["addressObject"] in getattr(rule, "destination", []):
+                return True
+        if correlationResult["addressGroup"]:
+            combined = []
+            if hasattr(rule, "source"):
+                combined.extend(rule.source)
+            if hasattr(rule, "destination"):
+                combined.extend(rule.destination)
+            if correlationResult["addressGroup"] in combined:
+                return True
+        # TODO: Add additional checks for VLAN, zone, applications, and services.
+        return False
 
+    def findMatchingRules(self, correlationResult):
+        """
+        Iterate through device group rules and return a list of rules
+        that match the correlation result.
+        """
+        matching_rules = []
+        for dgName, ruleTypes in self.deviceGroupRules.items():
+            for ruleTypeName, rules in ruleTypes.items():
+                for rule in rules:
+                    if self.ruleImpactsCorrelation(rule, correlationResult):
+                        matching_rules.append({
+                            "deviceGroup": dgName,
+                            "ruleType": ruleTypeName,
+                            "ruleName": rule.name,
+                            "source": getattr(rule, "source", []),
+                            "destination": getattr(rule, "destination", [])
+                        })
+        return matching_rules
 
+    def fullCorrelationLookup(self, input_value):
+        """
+        High-level method:
+         1. Correlate the input to known objects.
+         2. (Optionally) correlate applications and services.
+         3. Find and return all matching rules.
+        """
+        correlationResult = self.correlateInput(input_value)
+        if not correlationResult:
+            return None
+        correlationResult = self.correlateApplications(correlationResult)
+        correlationResult = self.correlateServices(correlationResult)
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
 
-def correlateApplications():
-    #TODO: Correlate applications to their respective udp/tcp ports
-    pass
+    # --- Basic Rule Lookup Methods End Here ---
+    # --- !!! Lookup Methods Based on Different Input Types Start Here !!! ---
 
-def correlateServices():
-    #TODO: Correlate services to their respective udp/tcp ports
-    pass
+    def lookupRulesByAddressObject(self, addressObject):
+        """
+        Lookup rules that reference the given address object.
+        Builds a correlation result using the address object's name and related groups.
+        """
+        correlationResult = {
+            "ip": None,
+            "addressObject": addressObject.name,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": self.correlateAddressToAddressGroup(addressObject),
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
+    def lookupRulesBySubnet(self, subnet):
+        """
+        Lookup rules that apply to the given subnet.
+        TODO: Implement logic to match rules based on subnet overlap.
+        """
+        correlationResult = {
+            "ip": subnet,
+            "addressObject": None,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": None,
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+        # Extend this by checking if the subnet overlaps with any address object.
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
+    def lookupRulesByApplication(self, applicationName):
+        """
+        Lookup rules that reference the given application.
+        TODO: Implement logic to match rules by application.
+        """
+        correlationResult = {
+            "ip": None,
+            "addressObject": None,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": None,
+            "applications": [applicationName],
+            "services": None,
+            "matchingRules": []
+        }
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
+    def lookupRulesByZone(self, zone):
+        """
+        Lookup rules that apply to the given zone.
+        TODO: Implement logic to match rules based on zone associations.
+        """
+        correlationResult = {
+            "ip": None,
+            "addressObject": None,
+            "vlan": None,
+            "zone": zone,
+            "addressGroup": None,
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
+    # --- Lookup Methods Based on Different Input Types End Here ---
+
 
 def testMethods(panData):
-    #MAKE A TEST FUNCTION THAT MAKES LIMITED CALLS TO THE PANORAMA API
-    #Select 1 device group, 1 rule type, and fetch all of that rule type for sec rule
-    pass
+    """
+    Test function to verify limited API calls and functionality.
+    Example: Correlate a known IP and lookup matching rules.
+    """
+    testIP = "192.168.1.10"  # Replace with a valid IP for testing.
+    result = panData.fullCorrelationLookup(testIP)
+    if result:
+        logging.info("Test correlation result for IP %s: %s", testIP, result)
+    else:
+        logging.error("No correlation result found for IP: %s", testIP)
 
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
@@ -306,5 +439,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
