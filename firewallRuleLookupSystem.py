@@ -231,16 +231,16 @@ class PanoramaData:
     # --- Correlating Objects Logic Ends Here ---
     # --- !!! Rule Lookup Methods Start Here !!! ---
 
-    def correlateInput(self, input_value):
+    def correlateInput(self, inputValue):
         """
         Determine the type of input and perform correlation.
-        Currently, assumes input_value is an IP address.
+        Currently, assumes inputValue is an IP address.
         """
         try:
-            ipaddress.ip_address(input_value)
-            correlationResult = self.correlateIP(input_value)
+            ipaddress.ip_address(inputValue)
+            correlationResult = self.correlateIP(inputValue)
         except ValueError:
-            logging.error("Input value is not a valid IP address: %s", input_value)
+            logging.error("Input value is not a valid IP address: %s", inputValue)
             return None
         return correlationResult
 
@@ -287,28 +287,28 @@ class PanoramaData:
         Iterate through device group rules and return a list of rules
         that match the correlation result.
         """
-        matching_rules = []
+        matchingRules = []
         for dgName, ruleTypes in self.deviceGroupRules.items():
             for ruleTypeName, rules in ruleTypes.items():
                 for rule in rules:
                     if self.ruleImpactsCorrelation(rule, correlationResult):
-                        matching_rules.append({
+                        matchingRules.append({
                             "deviceGroup": dgName,
                             "ruleType": ruleTypeName,
                             "ruleName": rule.name,
                             "source": getattr(rule, "source", []),
                             "destination": getattr(rule, "destination", [])
                         })
-        return matching_rules
+        return matchingRules
 
-    def fullCorrelationLookup(self, input_value):
+    def fullCorrelationLookup(self, inputValue):
         """
         High-level method:
          1. Correlate the input to known objects.
          2. (Optionally) correlate applications and services.
          3. Find and return all matching rules.
         """
-        correlationResult = self.correlateInput(input_value)
+        correlationResult = self.correlateInput(inputValue)
         if not correlationResult:
             return None
         correlationResult = self.correlateApplications(correlationResult)
