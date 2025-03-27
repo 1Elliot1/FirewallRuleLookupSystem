@@ -237,7 +237,6 @@ class PanoramaData:
         Currently, assumes inputValue is an IP address.
         """
         try:
-            ipaddress.ip_address(inputValue)
             correlationResult = self.correlateIP(inputValue)
         except ValueError:
             logging.error("Input value is not a valid IP address: %s", inputValue)
@@ -271,11 +270,21 @@ class PanoramaData:
                 return True
             if correlationResult["addressObject"] in getattr(rule, "destination", []):
                 return True
+        if correlationResult["vlan"]:
+            if correlationResult["vlan"] in getattr(rule, "source", []):
+                return True
+            if correlationResult["vlan"] in getattr(rule, "destination", []):
+                return True
+        if correlationResult["zone"]:
+            if correlationResult["zone"] in getattr(rule, "fromzone", []):
+                return True
+            if correlationResult["zone"] in getattr(rule, "tozone", []):
+                return True
         if correlationResult["addressGroup"]:
             combined = []
-            if hasattr(rule, "source"):
+            if hasattr(rule, "source_user"):
                 combined.extend(rule.source)
-            if hasattr(rule, "destination"):
+            if hasattr(rule, "destination_user"):
                 combined.extend(rule.destination)
             if correlationResult["addressGroup"] in combined:
                 return True
@@ -302,7 +311,9 @@ class PanoramaData:
                             "destination": getattr(rule, "destination", []),
                             "action": getattr(rule, "action", None),
                             "service": getattr(rule, "service", []),
-                            "application": getattr(rule, "application", [])
+                            "application": getattr(rule, "application", []),
+                            "fromzone": getattr(rule, "fromzone", []),
+                            "tozone": getattr(rule, "tozone", [])
                         })
         return matchingRules
 
@@ -405,7 +416,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "192.168.1.10"  # Replace with a valid IP for testing.
+    testIP = "172.31.10.46/32"  # Replace with a valid IP for testing.
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
@@ -433,7 +444,7 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
-
+    testMethods(panData)
     #Test Example:
     # testIP = ""
     # result = panData.correlateIP(testIP)
