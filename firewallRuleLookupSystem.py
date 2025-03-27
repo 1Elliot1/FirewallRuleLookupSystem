@@ -249,7 +249,7 @@ class PanoramaData:
         Correlate applications to the input.
         TODO: Implement application correlation logic (e.g., based on UDP/TCP ports).
         """
-        correlationResult["applications"] = []  # Placeholder for matched applications.
+        correlationResult["applications"] = [] 
         return correlationResult
 
     def correlateServices(self, correlationResult):
@@ -291,13 +291,18 @@ class PanoramaData:
         for dgName, ruleTypes in self.deviceGroupRules.items():
             for ruleTypeName, rules in ruleTypes.items():
                 for rule in rules:
+                    #iterates through all rules, checks if they impact the query or any object the 
+                    #query is associated with
                     if self.ruleImpactsCorrelation(rule, correlationResult):
                         matchingRules.append({
                             "deviceGroup": dgName,
                             "ruleType": ruleTypeName,
                             "ruleName": rule.name,
                             "source": getattr(rule, "source", []),
-                            "destination": getattr(rule, "destination", [])
+                            "destination": getattr(rule, "destination", []),
+                            "action": getattr(rule, "action", None),
+                            "service": getattr(rule, "service", []),
+                            "application": getattr(rule, "application", [])
                         })
         return matchingRules
 
