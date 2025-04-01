@@ -335,23 +335,23 @@ class PanoramaData:
     # --- Basic Rule Lookup Methods End Here ---
     # --- !!! Lookup Methods Based on Different Input Types Start Here !!! ---
 
-    def lookupRulesByAddressObject(self, addressObject):
-        """
-        Lookup rules that reference the given address object.
-        Builds a correlation result using the address object's name and related groups.
-        """
-        correlationResult = {
-            "ip": None,
-            "addressObject": addressObject.name,
-            "vlan": None,
-            "zone": None,
-            "addressGroup": self.correlateAddressToAddressGroup(addressObject),
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
+    # def lookupRulesByAddressObject(self, addressObject):
+    #     """
+    #     Lookup rules that reference the given address object.
+    #     Builds a correlation result using the address object's name and related groups.
+    #     """
+    #     correlationResult = {
+    #         "ip": None,
+    #         "addressObject": addressObject.name,
+    #         "vlan": None,
+    #         "zone": None,
+    #         "addressGroup": self.correlateAddressToAddressGroup(addressObject),
+    #         "applications": None,
+    #         "services": None,
+    #         "matchingRules": []
+    #     }
+    #     correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+    #     return correlationResult
 
     def lookupRulesBySubnet(self, subnet):
         """
@@ -393,8 +393,12 @@ class PanoramaData:
     def lookupRulesByZone(self, zone):
         """
         Lookup rules that apply to the given zone.
-        TODO: Implement logic to match rules based on zone associations.
         """
+        #Since zones do not have a parent "bucket" aside from maybe a template, could I just return the 
+        #rules that impact that zone?
+        #Tested 04.01.2025. Seems to return nearly all rules applied to a zone. Counted a difference of 10 
+        #when manually checking. Have a feeling it has to do with predefined rules? Try to validate 
+        #where the descrepancy is coming from.
         correlationResult = {
             "ip": None,
             "addressObject": None,
@@ -415,12 +419,25 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "172.31.10.46/32"  # Replace with a valid IP for testing.
+    testIP = ""  # Replace with a valid IP for testing.
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
     else:
         logging.error("No correlation result found for IP: %s", testIP)
+
+def testZoneLookup(panData):
+    """
+    Test function to verify zone lookup functionality.
+    Example: Lookup rules based on a known zone.
+    """
+    testZone = "" 
+    result = panData.lookupRulesByZone(testZone)
+    if result:
+        logging.info("Test correlation result for zone %s: %s", testZone, result)
+        print(f"Rules Found: {len(result['matchingRules'])}")
+    else:
+        logging.error("No correlation result found for zone: %s", testZone)
 
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
@@ -444,7 +461,7 @@ def main():
     #build PanoramaData object
     panData = PanoramaData(pano)
 
-    testMethods(panData)
+    testZoneLookup(panData)
 
 if __name__ == "__main__":
     main()
