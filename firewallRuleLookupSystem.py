@@ -146,7 +146,7 @@ class PanoramaData:
         """
         Given an address object and a VLAN map (vlanNum -> CIDR),
         return the VLAN number if the object's IP falls within a range.
-        """
+        """ 
         cleanIp = addressObject.value.split("/")[0]
         for vlanNum, vlanCidr in vlanMap.items():
             if self.ipInCidr(cleanIp, str(vlanCidr)):
@@ -157,7 +157,6 @@ class PanoramaData:
     def correlateVlanToZone(vlanNum, zones):
         """
         Given a VLAN number and a list of zones, correlate the VLAN to a zone.
-        TODO: Enhance logic to better match VLAN names/interfaces.
         """
         #Issue with this is that zones are not how you get the sub interfaces, templates are
         for zone in zones:
@@ -170,7 +169,7 @@ class PanoramaData:
                             return zone.name
                 except IndexError:
                     logging.error(f"Error parsing VLAN number from interface name: {interface}")
-                    continue 
+                    continue
         return None
 
     def correlateAddressToAddressGroup(self, addressObject):
@@ -178,7 +177,9 @@ class PanoramaData:
         Given an address object, try to correlate it to an address group
         """
         for addressGroup in self.addressGroups:
+            #if address group is comprised of static values (as far as I can tell so far, all are)
             if hasattr(addressGroup, "static_value"):
+                #if name or value of any address object in the group matches the address object
                 if any(addressObject.name == a or addressObject.value == a for a in addressGroup.static_value):
                     return addressGroup.name
         return None
@@ -265,6 +266,8 @@ class PanoramaData:
         This example checks if the address object or address group appears in the rule's source or destination.
         Extend with VLAN, zone, application, or service checks as needed.
         """
+
+        #Feels like a very clunky method... any improvements?
         if correlationResult["addressObject"]:
             if correlationResult["addressObject"] in getattr(rule, "source", []):
                 return True
@@ -281,14 +284,11 @@ class PanoramaData:
             if correlationResult["zone"] in getattr(rule, "tozone", []):
                 return True
         if correlationResult["addressGroup"]:
-            combined = []
-            if hasattr(rule, "source_user"):
-                combined.extend(rule.source)
-            if hasattr(rule, "destination_user"):
-                combined.extend(rule.destination)
-            if correlationResult["addressGroup"] in combined:
+            if correlationResult["addressGroup"] in getattr(rule, "source", []):
                 return True
-        # TODO: Add additional checks for VLAN, zone, applications, and services.
+            if correlationResult["addressGroup"] in getattr(rule, "destination", []):
+                return True
+        # TODO: Add additional checks for applications, and services.
         return False
 
     def findMatchingRules(self, correlationResult):
@@ -410,7 +410,6 @@ class PanoramaData:
 
     # --- Lookup Methods Based on Different Input Types End Here ---
 
-
 def testMethods(panData):
     """
     Test function to verify limited API calls and functionality.
@@ -444,14 +443,8 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
+
     testMethods(panData)
-    #Test Example:
-    # testIP = ""
-    # result = panData.correlateIP(testIP)
-    # if result:
-    #    logging.info(f"Correlation Result for IP: {testIP}\n{result}")
-    # else:
-    #    logging.error(f"No correlation result found for IP: {testIP}")
 
 if __name__ == "__main__":
     main()
