@@ -211,6 +211,32 @@ class PanoramaData:
             #"services": None
         }
 
+
+    def correlateAddressObjectName(self, addressObjectName):
+        """
+        Given an address object name (string), find its associated AddressObject,
+        VLAN, Zone, and AddressGroup.
+        """
+        #find matching addressObject for the given IP
+        matchedObject = None
+        for obj in self.addressObjects:
+            if obj.name == addressObjectName:
+                matchedObject = obj
+                break
+        if not matchedObject:
+            logging.error(f"No AddressObject found for name: {addressObjectName}")
+            return None
+        
+        correlationResult = {
+            "ip": matchedObject.value,
+            "addressObject": addressObjectName,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": None,
+            "matchingRules": []
+            #"applications": None,
+            #"services": None
+        }
         #check each vlanData bucket until a matching VLAN is found
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
@@ -225,8 +251,6 @@ class PanoramaData:
         #Correlate the AddressObject to an AddressGroup
         correlationResult["addressGroup"] = self.correlateAddressToAddressGroup(matchedObject)
 
-        #correlationResult["matchingRules"] = self.findMatchingRules(matchedObject, correlationResult["zone"])
-
         return correlationResult
 
     # --- Correlating Objects Logic Ends Here ---
@@ -236,9 +260,11 @@ class PanoramaData:
         """
         Determine the type of input and perform correlation.
         Currently, assumes inputValue is an IP address.
+        TODO: This is where you will parse the users query and figure out what to search by (IP, name, range, group, vlan, zone, etc. )
         """
+        #use regex to parse which input is most likely?
         try:
-            correlationResult = self.correlateIP(inputValue)
+            correlationResult = self.correlateAddressObjectName(inputValue)
         except ValueError:
             logging.error("Input value is not a valid IP address: %s", inputValue)
             return None
@@ -419,7 +445,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = ""  # Replace with a valid IP for testing.
+    testIP = "testHostName"  # Replace with a valid IP for testing.
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
@@ -461,7 +487,7 @@ def main():
     #build PanoramaData object
     panData = PanoramaData(pano)
 
-    testZoneLookup(panData)
+    testMethods(panData)
 
 if __name__ == "__main__":
     main()
