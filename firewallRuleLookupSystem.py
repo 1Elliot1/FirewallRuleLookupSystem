@@ -213,7 +213,7 @@ class PanoramaData:
         
         correlationResult = {
             "ip": ip,
-            "addressObject": matchedObject.name,
+            "addressObject": [matchedObject.name],
             "vlan": None,
             "zone": None,
             "addressGroup": None,
@@ -239,7 +239,7 @@ class PanoramaData:
         
         correlationResult = {
             "ip": matchedObject.value,
-            "addressObject": addressObjectName,
+            "addressObject": [addressObjectName],
             "vlan": None,
             "zone": None,
             "addressGroup": None,
@@ -274,7 +274,7 @@ class PanoramaData:
         """
         #use regex to parse which input is most likely?
         try:
-            correlationResult = self.correlateAddressObjectName(inputValue)
+            correlationResult = self.correlateIP(inputValue)
         except ValueError:
             logging.error("Input value is not a valid IP address: %s", inputValue)
             return None
@@ -305,10 +305,11 @@ class PanoramaData:
 
         #Feels like a very clunky method... any improvements?
         if correlationResult["addressObject"]:
-            if correlationResult["addressObject"] in getattr(rule, "source", []):
-                return True
-            if correlationResult["addressObject"] in getattr(rule, "destination", []):
-                return True
+            for addr in correlationResult["addressObject"]:
+                if addr in getattr(rule, "source", []):
+                    return True
+                if addr in getattr(rule, "destination", []):
+                    return True
         if correlationResult["vlan"]:
             if correlationResult["vlan"] in getattr(rule, "source", []):
                 return True
@@ -496,16 +497,16 @@ class PanoramaData:
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
 
-    def lookupRulesByCid(self, cidr):
+    def lookupRulesByCIDR(self, CIDR):
         """
         Lookup rules that apply to the given CIDR range.
         This method checks if provided CIDR overlaps with any of the VLAN CIDR ranges or address objects
         then builds a correlation result accordingly
         """
-        network = ipaddress.ip_network(cidr, strict=False)
+        network = ipaddress.ip_network(CIDR, strict=False)
         correlationResult = {
-            "ip": cidr,
-            "addressObject": None,
+            "ip": CIDR,
+            "addressObject": [],
             "vlan": None,
             "zone": None,
             "addressGroup": None,
@@ -513,12 +514,12 @@ class PanoramaData:
             "services": None,
             "matchingRules": []
         }
-
+        #Alter to return rules for any address object that overlaps with the CIDR range
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
             zones = data.get("zones", [])
-            for vlanNum, vlanCidr in vlanMap.items():
-                vlanNetwork = ipaddress.ip_network(str(vlanCidr), strict=False)
+            for vlanNum, vlanCIDR in vlanMap.items():
+                vlanNetwork = ipaddress.ip_network(str(vlanCIDR), strict=False)
                 if network.overlaps(vlanNetwork):
                     correlationResult["vlan"] = vlanNum
                     correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
@@ -526,6 +527,14 @@ class PanoramaData:
             if correlationResult["vlan"]:
                 break
         
+        #Check individual address objects for overlap with the CIDR range
+        for addr in self.addressObjects:
+            try:
+                addrIP = ipaddress.ip_network(addr.value.split('/')[0])
+                if addrIP in network:
+                    correlationResult["addressObject"].append(addr.name)
+            except ValueError:
+                logging.error(f"Invalid address object value: {addr.value}")
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
 
@@ -537,7 +546,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "EXTHOST-CHS-PACS" 
+    testIP = "" 
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
@@ -549,10 +558,10 @@ def testZoneLookup(panData):
     Test function to verify zone lookup functionality.
     Example: Lookup rules based on a known zone.
     """
-    testZone = "" 
-    result = panData.lookupRulesByZone(testZone)
+    testZone = "690" 
+    result = panData.lookupRulesByVlan(testZone)
     if result:
-        logging.info("Test correlation result for zone %s: %s", testZone, result)
+        logging.info("Test correlation result for VLAN %s: %s", testZone, result)
         print(f"Rules Found: {len(result['matchingRules'])}")
     else:
         logging.error("No correlation result found for zone: %s", testZone)
@@ -579,7 +588,7 @@ def main():
     #build PanoramaData object
     panData = PanoramaData(pano)
 
-    testMethods(panData)
+    testZoneLookup(panData)
 
 if __name__ == "__main__":
     main()
