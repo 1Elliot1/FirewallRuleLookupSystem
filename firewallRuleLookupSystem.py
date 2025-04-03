@@ -176,12 +176,15 @@ class PanoramaData:
         """
         Given an address object, try to correlate it to an address group
         """
+        addressGroupList = []
         for addressGroup in self.addressGroups:
             #if address group is comprised of static values (as far as I can tell so far, all are)
             if hasattr(addressGroup, "static_value"):
                 #if name or value of any address object in the group matches the address object
                 if any(addressObject.name == a or addressObject.value == a for a in addressGroup.static_value):
-                    return addressGroup.name
+                    addressGroupList.append(addressGroup.name)
+        if len(addressGroupList) != 0:
+            return addressGroupList
         return None
 
     def correlateIP(self, ip):
@@ -310,10 +313,12 @@ class PanoramaData:
             if correlationResult["zone"] in getattr(rule, "tozone", []):
                 return True
         if correlationResult["addressGroup"]:
-            if correlationResult["addressGroup"] in getattr(rule, "source", []):
-                return True
-            if correlationResult["addressGroup"] in getattr(rule, "destination", []):
-                return True
+            #can be apart of multiple groups, so check if any of the address groups match
+            for addressGroup in correlationResult["addressGroup"]:
+                if addressGroup in getattr(rule, "source", []):
+                    return True
+                if addressGroup in getattr(rule, "destination", []):
+                    return True
         # TODO: Add additional checks for applications, and services.
         return False
 
@@ -360,24 +365,6 @@ class PanoramaData:
 
     # --- Basic Rule Lookup Methods End Here ---
     # --- !!! Lookup Methods Based on Different Input Types Start Here !!! ---
-
-    # def lookupRulesByAddressObject(self, addressObject):
-    #     """
-    #     Lookup rules that reference the given address object.
-    #     Builds a correlation result using the address object's name and related groups.
-    #     """
-    #     correlationResult = {
-    #         "ip": None,
-    #         "addressObject": addressObject.name,
-    #         "vlan": None,
-    #         "zone": None,
-    #         "addressGroup": self.correlateAddressToAddressGroup(addressObject),
-    #         "applications": None,
-    #         "services": None,
-    #         "matchingRules": []
-    #     }
-    #     correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-    #     return correlationResult
 
     def lookupRulesBySubnet(self, subnet):
         """
@@ -437,6 +424,25 @@ class PanoramaData:
         }
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
+    
+    def lookupRulesByAddressGroup(self, addressGroupName):
+        """
+        Lookup rules that apply to the given address group.
+        TODO: Return objects encapsulated by the group. 
+        TODO: Handle nested groups. If a group is part of a parent group, the parent groups rules impact it as well 
+        """
+        correlationResult = {
+            "ip": None,
+            "addressObject": None,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": addressGroupName,
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
 
     # --- Lookup Methods Based on Different Input Types End Here ---
 
@@ -445,7 +451,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "testHostName"  # Replace with a valid IP for testing.
+    testIP = "CSHOST-alpine"  # Replace with a valid IP for testing.
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
