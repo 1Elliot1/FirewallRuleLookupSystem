@@ -519,7 +519,7 @@ class PanoramaData:
             vlanMap = data.get("vlanMap", {})
             zones = data.get("zones", [])
             for vlanNum, vlanCIDR in vlanMap.items():
-                vlanNetwork = ipaddress.ip_network(str(vlanCIDR), strict=False)
+                vlanNetwork = ipaddress.ip_network(str(vlanCIDR).strip("'[]"), strict=False)
                 if network.overlaps(vlanNetwork):
                     correlationResult["vlan"] = vlanNum
                     correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
@@ -530,8 +530,8 @@ class PanoramaData:
         #Check individual address objects for overlap with the CIDR range
         for addr in self.addressObjects:
             try:
-                addrIP = ipaddress.ip_network(addr.value.split('/')[0])
-                if addrIP in network:
+                addrIP = addr.value.split('/')[0]
+                if self.ipInCidr(addrIP, CIDR):
                     correlationResult["addressObject"].append(addr.name)
             except ValueError:
                 logging.error(f"Invalid address object value: {addr.value}")
@@ -558,13 +558,67 @@ def testZoneLookup(panData):
     Test function to verify zone lookup functionality.
     Example: Lookup rules based on a known zone.
     """
-    testZone = "690" 
+    testZone = "" 
     result = panData.lookupRulesByVlan(testZone)
     if result:
         logging.info("Test correlation result for VLAN %s: %s", testZone, result)
         print(f"Rules Found: {len(result['matchingRules'])}")
     else:
         logging.error("No correlation result found for zone: %s", testZone)
+
+def testReport(panData):
+    searchTerm = ""
+    result = panData.lookupRulesByCIDR(searchTerm)
+
+    if not result:
+        logging.error("No correlation result found for search term: %s", searchTerm)
+        return
+    
+    reportLines = []
+    reportLines.append(f"========== Detailed Report =========\nSearch Term: {searchTerm}")
+    reportLines.append(f"Zone: {result['zone']}")
+    reportLines.append(f"VLAN: {result['vlan']}")
+
+    ipObjs = result["addressObject"]
+    if isinstance(ipObjs, list):
+        reportLines.append(f"Address Object(s): {', '.join(ipObjs)}")
+    else:
+        reportLines.append(f"Address Object: {ipObjs}")
+
+    matchingRules = result["matchingRules"]
+    if matchingRules:
+        ruleCounts = {}
+        ruleExamples = {}
+        for rule in matchingRules:
+            ruleType = rule["ruleType"]
+            ruleCounts[ruleType] = ruleCounts.get(ruleType, 0) + 1
+            if ruleType not in ruleExamples:
+                ruleExamples[ruleType] = rule
+            
+        reportLines.append("\n---------- Matching Rule Summary ------------")
+        for ruleType, count in ruleCounts.items():
+            reportLines.append(f"{ruleType}: {count} rules")
+        reportLines.append("\n---------- Matching Rule Examples ------------")
+        for ruleType, rule in ruleExamples.items():
+            example = {
+                f"[{ruleType}]"
+                f"Device Group: {rule['deviceGroup']}",
+                f"Rule Name: {rule['ruleName']}",
+                f"Source: {', '.join(rule['source'])}",
+                f"Destination: {', '.join(rule['destination'])}",
+                f"Action: {rule['action']}",
+                f"Service: {', '.join(rule['service'])}",
+                f"Application: {', '.join(rule['application'])}",
+                f"From Zone: {', '.join(rule['fromzone'])}",
+                f"To Zone: {', '.join(rule['tozone'])}"
+            }
+        reportLines.append("\n".join(example))
+    else:
+        reportLines.append("No matching rules found.")
+    
+    reportLines.append("\n=========================================")
+    report = "\n".join(reportLines)
+    logging.info(report)
 
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
@@ -588,7 +642,7 @@ def main():
     #build PanoramaData object
     panData = PanoramaData(pano)
 
-    testZoneLookup(panData)
+    testReport(panData)
 
 if __name__ == "__main__":
     main()
