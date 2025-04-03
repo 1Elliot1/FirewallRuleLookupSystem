@@ -148,6 +148,7 @@ class PanoramaData:
         return the VLAN number if the object's IP falls within a range.
         """ 
         cleanIp = addressObject.value.split("/")[0]
+        print(addressObject.value)
         for vlanNum, vlanCidr in vlanMap.items():
             if self.ipInCidr(cleanIp, str(vlanCidr)):
                 return vlanNum
@@ -176,16 +177,23 @@ class PanoramaData:
         """
         Given an address object, try to correlate it to an address group
         """
-        addressGroupList = []
+        directGroups = []
         for addressGroup in self.addressGroups:
             #if address group is comprised of static values (as far as I can tell so far, all are)
             if hasattr(addressGroup, "static_value"):
                 #if name or value of any address object in the group matches the address object
                 if any(addressObject.name == a or addressObject.value == a for a in addressGroup.static_value):
-                    addressGroupList.append(addressGroup.name)
-        if len(addressGroupList) != 0:
-            return addressGroupList
-        return None
+                    directGroups.append(addressGroup.name)
+        if not directGroups:
+            return None
+        
+        #Handling IP objects that are only explicitly mentioned in a nested group:
+        fullGroupList = set(directGroups)
+        for group in directGroups:
+            parentGroups = self.resolveNestedAddressGroups(group)
+            fullGroupList.update(parentGroups)
+
+        return list(fullGroupList)
 
     def correlateIP(self, ip):
         """
@@ -213,7 +221,6 @@ class PanoramaData:
             #"applications": None,
             #"services": None
         }
-
 
     def correlateAddressObjectName(self, addressObjectName):
         """
@@ -425,24 +432,103 @@ class PanoramaData:
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
     
+    def resolveNestedAddressGroups(self, addressGroupName, seen = None):
+        """
+        Recursively resolve nested address groups.
+        """
+        if seen is None:
+            seen = set()
+        parentGroups = set()
+        for group in self.addressGroups:
+            if hasattr(group, "static_value"):
+                if addressGroupName in group.static_value and group.name not in seen:
+                    seen.add(group.name)
+                    parentGroups.add(group.name)
+                    # Recursively resolve nested groups
+                    parentGroups.update(self.resolveNestedAddressGroups(group.name, seen))
+        return list(parentGroups)
+
     def lookupRulesByAddressGroup(self, addressGroupName):
         """
         Lookup rules that apply to the given address group.
-        TODO: Return objects encapsulated by the group. 
-        TODO: Handle nested groups. If a group is part of a parent group, the parent groups rules impact it as well 
         """
+        resolvedGroups = {addressGroupName}
+        parentGroups = self.resolveNestedAddressGroups(addressGroupName)
+        resolvedGroups.update(parentGroups)
+
         correlationResult = {
             "ip": None,
             "addressObject": None,
             "vlan": None,
             "zone": None,
-            "addressGroup": addressGroupName,
+            "addressGroup": list(resolvedGroups),
             "applications": None,
             "services": None,
             "matchingRules": []
         }
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
+
+    def lookupRulesByVlan(self, vlanNum):
+        """
+        Lookup rules that apply to the given VLAN number
+        Method uses the vlanData mapping to correlate VLAN to its CIDR range and associated zones,
+        then builds a correlation result for the rule matching. 
+        """
+        correlationResult = {
+            "ip": None,
+            "addressObject": None,
+            "vlan": vlanNum,
+            "zone": None,
+            "addressGroup": None,
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+
+        for key, data in self.vlanData.items():
+            vlanMap = data.get("vlanMap", {})
+            zones = data.get("zones", [])
+            if vlanNum in vlanMap:
+                correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
+                #break to avoid unnecessary iterations once a match is found
+                break
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
+    def lookupRulesByCid(self, cidr):
+        """
+        Lookup rules that apply to the given CIDR range.
+        This method checks if provided CIDR overlaps with any of the VLAN CIDR ranges or address objects
+        then builds a correlation result accordingly
+        """
+        network = ipaddress.ip_network(cidr, strict=False)
+        correlationResult = {
+            "ip": cidr,
+            "addressObject": None,
+            "vlan": None,
+            "zone": None,
+            "addressGroup": None,
+            "applications": None,
+            "services": None,
+            "matchingRules": []
+        }
+
+        for key, data in self.vlanData.items():
+            vlanMap = data.get("vlanMap", {})
+            zones = data.get("zones", [])
+            for vlanNum, vlanCidr in vlanMap.items():
+                vlanNetwork = ipaddress.ip_network(str(vlanCidr), strict=False)
+                if network.overlaps(vlanNetwork):
+                    correlationResult["vlan"] = vlanNum
+                    correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
+                    break
+            if correlationResult["vlan"]:
+                break
+        
+        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
+        return correlationResult
+
 
     # --- Lookup Methods Based on Different Input Types End Here ---
 
@@ -451,7 +537,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "CSHOST-alpine"  # Replace with a valid IP for testing.
+    testIP = "EXTHOST-CHS-PACS" 
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
