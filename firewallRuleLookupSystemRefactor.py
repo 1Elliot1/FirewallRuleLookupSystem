@@ -21,6 +21,8 @@ class PanoramaData:
         self.pano = pano
         self.addressObjects = AddressObject.refreshall(pano)
         self.addressGroups = AddressGroup.refreshall(pano)
+        #TODO: Find out how to fetch shared device group
+        #See refresh_shared_objects() in panos docs?
         self.deviceGroups = DeviceGroup.refreshall(pano)
         self.templates = Template.refreshall(pano)
         self.applicationObject = ApplicationObject.refreshall(pano)
@@ -28,7 +30,6 @@ class PanoramaData:
         self.applicationContainers = ApplicationContainer.refreshall(pano)
         self.serviceObjects = ServiceObject.refreshall(pano)
         self.serviceGroups = ServiceGroup.refreshall(pano)
-
         self.predefined = Predefined(pano)
         self.predefined.refreshall_applications()
         self.predefined.refreshall_services()
@@ -488,7 +489,7 @@ def testReport(panData):
       - Summary of matching rules per type, with one example per type.
     """
     searchTerm = ""  # Adjust as needed
-    result = panData.lookupRulesByCIDR(searchTerm)
+    result = panData.fullCorrelationLookup(searchTerm) #adjust as needed
     if not result:
         logging.error("No correlation result found for search term: %s", searchTerm)
         return
@@ -532,7 +533,8 @@ def testReport(panData):
         reportLines.append("No matching rules found.")
 
     reportLines.append("========== End of Report ==========")
-    print("\n".join(reportLines))
+    print(reportLines)
+    print(panData.deviceGroups)
 
 
 def main():
