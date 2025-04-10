@@ -190,7 +190,7 @@ class PanoramaData:
         VLAN, Zone, and AddressGroup.
         """
         #iterate through each object in addressObjects and check if the value matches the IP
-        matched = next((obj for obj in self.addressObjects if obj.value == ip), None)
+        matched = next((obj for obj in self.addressObjects if obj.value.split('/')[0] == ip), None)
         if not matched:
             #catch if nones found:
             logging.error("No AddressObject found for IP: %s", ip)
@@ -204,7 +204,7 @@ class PanoramaData:
             "addressGroup": None,
             "matchingRules": []
         }
-        #!!! Here, the refactor changes the logic to correlate zone, addrGroups, and vlans within the correlateIP method
+    
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
             zones = data.get("zones", [])
@@ -488,7 +488,7 @@ def testReport(panData):
       - Matching IP objects (and count)
       - Summary of matching rules per type, with one example per type.
     """
-    searchTerm = ""  # Adjust as needed
+    searchTerm = "172.31.10.46/32"  # Adjust as needed
     result = panData.fullCorrelationLookup(searchTerm) #adjust as needed
     if not result:
         logging.error("No correlation result found for search term: %s", searchTerm)
@@ -534,7 +534,6 @@ def testReport(panData):
 
     reportLines.append("========== End of Report ==========")
     print(reportLines)
-    print(panData.deviceGroups)
 
 
 def main():
