@@ -138,6 +138,9 @@ class PanoramaData:
         try:
             temp = cidr.strip("'[]")
             resultIP = ipaddress.ip_address(ip) in ipaddress.ip_network(temp, strict = False)
+            print(ip)
+            print(temp)
+            print(resultIP)
             return resultIP
         except ValueError:
             return False
@@ -201,19 +204,23 @@ class PanoramaData:
         VLAN, Zone, and AddressGroup.
         """
         #find matching addressObject for the given IP
-        matchedObject = None
-        for obj in self.addressObjects:
-            if obj.value == ip.strip():
-                matchedObject = obj
-                break
-        #matchedObject = next((obj for obj in self.addressObjects if obj.value == ip), None)
-        if not matchedObject:
+        # matchedObject = None
+        # for obj in self.addressObjects:
+        #     if obj.value == ip.strip():
+        #         matchedObject = obj
+        #         break
+        # #matchedObject = next((obj for obj in self.addressObjects if obj.value == ip), None)
+        # if not matchedObject:
+        #     logging.error(f"No AddressObject found for IP: {ip}")
+        #     return None
+        matchedObjects = self.correlateAddressObjects(ip)
+        if not matchedObjects:
             logging.error(f"No AddressObject found for IP: {ip}")
             return None
         
         correlationResult = {
             "ip": ip,
-            "addressObject": [matchedObject.name],
+            "addressObject": [obj.name for obj in matchedObjects],
             "vlan": None,
             "zone": None,
             "addressGroup": None,
@@ -221,15 +228,26 @@ class PanoramaData:
             #"applications": None,
             #"services": None
         }
+        #not sure how to correlate vlan/zones to multiple address objects if they match. 
+        #Theoretically, I would think all matches should be in the same network segments anyway, for 
+        #now, going to choose the first match. Come back to. 
+        primaryMatch = matchedObjects[0]
         for key, data in self.vlanData.items():
             vlanMap = data.get("vlanMap", {})
             zones = data.get("zones", [])
-            vlanNum = self.correlateAddressToVlan(matchedObject, vlanMap)
+            vlanNum = self.correlateAddressToVlan(primaryMatch, vlanMap)
             if vlanNum:
                 correlationResult["vlan"] = vlanNum
                 correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
                 break
-        correlationResult["addressGroup"] = self.correlateAddressToAddressGroup(matchedObject)
+        
+        addressGroups = set()
+        for obj in matchedObjects:
+            groups = self.correlateAddressToAddressGroup(obj)
+            if groups:
+                addressGroups.update(groups)    
+
+        correlationResult["addressGroup"] = list(addressGroups) if addressGroups else None
         return correlationResult
 
     def correlateAddressObjectName(self, addressObjectName):
@@ -365,6 +383,29 @@ class PanoramaData:
                             "tozone": getattr(rule, "tozone", [])
                         })
         return matchingRules
+
+    def correlateAddressObjects(self, ip):
+        """
+        Return all address objects that contain the inut IP
+        This includes any exact matches and broader CIDR ranges
+        """
+        matchingObjects = []
+        try: 
+            #This method of checking for ip in network may cause issues-- double chec 
+            ipObj = ipaddress.ip_network(ip.strip())
+        except ValueError:
+            logging.error(f"Invalid IP address: {ip}")
+            return matchingObjects
+        
+        for addr in self.addressObjects:
+            try:
+                if self.ipInCidr(ipObj, addr.value):
+                    matchingObjects.append(addr)
+            except ValueError:
+                logging.error(f"Invalid address object value: {addr.value}")
+                continue
+        
+        return matchingObjects
 
     def fullCorrelationLookup(self, inputValue):
         """
@@ -558,9 +599,8 @@ def testMethods(panData):
     """
     testIP = "172.31.10.46/32" 
     result = panData.fullCorrelationLookup(testIP)
-    ruleLen = str(len(result['matchingRules']))
     if result:
-        logging.info("Test correlation result for IP %s: %s\nRule Amount: %s", testIP, result, ruleLen)
+        logging.info("Test correlation result for IP %s: %s", testIP, result)
     else:
         logging.error("No correlation result found for IP: %s", testIP)
 
