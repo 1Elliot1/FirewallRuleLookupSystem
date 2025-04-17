@@ -605,7 +605,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "172.28.0.123"
+    testIP = ""
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
@@ -617,7 +617,7 @@ def testZoneLookup(panData):
     Test function to verify zone lookup functionality.
     Example: Lookup rules based on a known zone.
     """
-    testZone = "690" 
+    testZone = "" 
     result = panData.lookupRulesByVlan(testZone)
     if result:
         logging.info("Test correlation result for VLAN %s: %s", testZone, result)
