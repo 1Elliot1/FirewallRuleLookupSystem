@@ -133,16 +133,35 @@ class PanoramaData:
     @staticmethod
     def ipInCidr(ip, cidr):
         """
-        Check if an IP address is within a given CIDR range
+        Check if an IP address or a smaller CIDR range is within a given CIDR range
+or equivalent to it.
         """
         try:
-            temp = cidr.strip("'[]")
-            resultIP = ipaddress.ip_address(ip) in ipaddress.ip_network(temp, strict = False)
-            print(ip)
-            print(temp)
-            print(resultIP)
-            return resultIP
-        except ValueError:
+            # Clean the CIDR input
+            cidrCleaned = cidr.strip("'[]")
+            network = ipaddress.ip_network(cidrCleaned, strict=False)
+
+            # Check if the input is a single IP or a CIDR range
+            #Treat /32 as a subnet still due to how ipaddress library works
+            if '/' in ip:
+                # Input is a CIDR range
+                inputNetwork = ipaddress.ip_network(ip, strict=False)
+                if inputNetwork.version != network.version:
+                    return False
+                # Check if the input network is a subnet of the given CIDR
+                return inputNetwork.subnet_of(network)
+            else:
+                # Input is a single IP
+                ipObj = ipaddress.ip_address(ip)   
+                #Catch if IP versions of the two inputs are differt, as IpAddress library   
+                if ipObj.version != network.version:
+                    return False       
+            # Check if the IP is within the CIDR or equivalent to the network address
+            isWithin = ipObj in network
+            isEquivalent = ipObj == network.network_address
+            return isWithin or isEquivalent
+        except ValueError as e:
+            logging.error(f"Error: {e}, Cidr: {cidr}, Input: {ip}")
             return False
 
     def correlateAddressToVlan(self, addressObject, vlanMap):
@@ -151,8 +170,9 @@ class PanoramaData:
         return the VLAN number if the object's IP falls within a range.
         """ 
         cleanIp = addressObject.value.split("/")[0]
-        print(addressObject.value)
+        print(f"AddressObject.value in correlateAddressToVlan Function: {addressObject.value}")
         for vlanNum, vlanCidr in vlanMap.items():
+            print(f"VLAN {vlanNum}: {vlanCidr}")
             if self.ipInCidr(cleanIp, str(vlanCidr)):
                 return vlanNum
         return None
@@ -203,16 +223,6 @@ class PanoramaData:
         Given an IP address (string), find its associated AddressObject,
         VLAN, Zone, and AddressGroup.
         """
-        #find matching addressObject for the given IP
-        # matchedObject = None
-        # for obj in self.addressObjects:
-        #     if obj.value == ip.strip():
-        #         matchedObject = obj
-        #         break
-        # #matchedObject = next((obj for obj in self.addressObjects if obj.value == ip), None)
-        # if not matchedObject:
-        #     logging.error(f"No AddressObject found for IP: {ip}")
-        #     return None
         matchedObjects = self.correlateAddressObjects(ip)
         if not matchedObjects:
             logging.error(f"No AddressObject found for IP: {ip}")
@@ -390,20 +400,14 @@ class PanoramaData:
         This includes any exact matches and broader CIDR ranges
         """
         matchingObjects = []
-        try: 
-            #This method of checking for ip in network may cause issues-- double chec 
-            ipObj = ipaddress.ip_network(ip.strip())
-        except ValueError:
-            logging.error(f"Invalid IP address: {ip}")
-            return matchingObjects
-        
         for addr in self.addressObjects:
-            try:
-                if self.ipInCidr(ipObj, addr.value):
-                    matchingObjects.append(addr)
-            except ValueError:
-                logging.error(f"Invalid address object value: {addr.value}")
-                continue
+            print(f"AddressObject.value in correlateAddressObjects Function: {addr.value} | IP Param: {ip}")
+            if addr.value == ip or self.ipInCidr(ip, addr.value):
+                matchingObjects.append(addr)
+        if not matchingObjects:
+            logging.error(f"No AddressObject found for IP: {ip}")
+            return None
+
         
         return matchingObjects
 
@@ -597,7 +601,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "172.31.10.46/32" 
+    testIP = "24.97.192.106/32"
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
