@@ -141,6 +141,9 @@ or equivalent to it.
             cidrCleaned = cidr.strip("'[]")
             network = ipaddress.ip_network(cidrCleaned, strict=False)
 
+            #catch for networks that are 0.0.0.0/0
+            if network.prefixlen == 0:
+                return False
             # Check if the input is a single IP or a CIDR range
             #Treat /32 as a subnet still due to how ipaddress library works
             if '/' in ip:
@@ -149,6 +152,7 @@ or equivalent to it.
                 if inputNetwork.version != network.version:
                     return False
                 # Check if the input network is a subnet of the given CIDR
+
                 return inputNetwork.subnet_of(network)
             else:
                 # Input is a single IP
@@ -238,17 +242,17 @@ or equivalent to it.
             #"applications": None,
             #"services": None
         }
-        #not sure how to correlate vlan/zones to multiple address objects if they match. 
-        #Theoretically, I would think all matches should be in the same network segments anyway, for 
-        #now, going to choose the first match. Come back to. 
-        primaryMatch = matchedObjects[0]
-        for key, data in self.vlanData.items():
-            vlanMap = data.get("vlanMap", {})
-            zones = data.get("zones", [])
-            vlanNum = self.correlateAddressToVlan(primaryMatch, vlanMap)
-            if vlanNum:
-                correlationResult["vlan"] = vlanNum
-                correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
+        #MAD INNEFICIENT WOWIEEEE
+        for obj in matchedObjects:
+            for key, data in self.vlanData.items():
+                vlanMap = data.get("vlanMap", {})
+                zones = data.get("zones", [])
+                vlanNum = self.correlateAddressToVlan(obj, vlanMap)
+                if vlanNum:
+                    correlationResult["vlan"] = vlanNum
+                    correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
+                    break
+            if correlationResult["vlan"]:
                 break
         
         addressGroups = set()
@@ -601,7 +605,7 @@ def testMethods(panData):
     Test function to verify limited API calls and functionality.
     Example: Correlate a known IP and lookup matching rules.
     """
-    testIP = "24.97.192.106/32"
+    testIP = "172.28.0.123"
     result = panData.fullCorrelationLookup(testIP)
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
