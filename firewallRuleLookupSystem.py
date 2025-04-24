@@ -597,8 +597,79 @@ or equivalent to it.
                 logging.error(f"Invalid address object value: {addr.value}")
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
+    
+    def buildCorrelationMatrix(self):
+        """
+        Build a comprehensive mapping of all objects (address objects, VLANs, zones, etc.) 
+        to their related objects, for visualization or export purposes.
+        Returns a list of dicts, each dict representing on object and its relationships
+        """
+        correlationMatrix = []
+
+        # --- Address Objects --- 
+        for addr in self.addressObjects:
+            entry = {
+                "type": "AddressObject",
+                "name": addr.name,
+                "value": addr.value,
+                "zone": None,
+                "vlan": None,
+                "parentGroups": self.correlateAddressToAddressGroup(addr) or [],
+            }
+
+            #get VLAN/Zone from correlation
+            for key, data in self.vlanData.items():
+                vlanMap = data.get("vlanMap", {})
+                zones = data.get("zones", [])
+                vlanNum = self.correlateAddressToVlan(addr, vlanMap)
+                if vlanNum:
+                    entry["vlan"] = vlanNum
+                    entry["zone"] = self.correlateVlanToZone(vlanNum, zones)
+                    break
+            
+            correlationMatrix.append(entry)
+
+        # --- Address Groups --- 
+        for group in self.addressGroups:
+            entry = {
+                "type": "AddressGroup",
+                "name": group.name,
+                "members": group.static_value if hasattr(group, "static_value") else [],
+                "parentGroups": self.resolveNestedAddressGroups(group.name),
+            }
+            correlationMatrix.append(entry)
+
+        # --- VLANs ---
+        for templateKey, data in self.vlanData.items():
+            vlanMap = data.get("vlanMap", {})
+            zones = data.get("zones", [])
+            for vlanNum, cidr in vlanMap.items():
+                entry = {
+                    "type": "VLAN",
+                    "name": vlanNum,
+                    "cidr": cidr,
+                    "zone": self.correlateVlanToZone(vlanNum, zones),
+                    "template": templateKey,
+                }
+                correlationMatrix.append(entry)
+
+        # --- Zones ---
+        zoneSet = set()
+        for data in self.vlanData.values():
+            for zone in data.get("zones", []):
+                zoneSet.add(zone.name)
+        
+        for zoneName in zoneSet:
+            entry = {
+                "type": "Zone",
+                "name": zoneName
+            }
+            correlationMatrix.append(entry)
+
+        return correlationMatrix
 
     # --- Export Utility Methods --- 
+
     def exportAllVlans(self):
         return self.vlanData
     
