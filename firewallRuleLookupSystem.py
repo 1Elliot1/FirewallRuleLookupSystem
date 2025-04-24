@@ -48,6 +48,7 @@ class PanoramaData:
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
+        print(self.deviceGroupRules)
 
     def collectDeviceGroupRules(self):
         """
@@ -165,7 +166,6 @@ or equivalent to it.
             isEquivalent = ipObj == network.network_address
             return isWithin or isEquivalent
         except ValueError as e:
-            logging.error(f"Error: {e}, Cidr: {cidr}, Input: {ip}")
             return False
 
     def correlateAddressToVlan(self, addressObject, vlanMap):
@@ -174,9 +174,7 @@ or equivalent to it.
         return the VLAN number if the object's IP falls within a range.
         """ 
         cleanIp = addressObject.value.split("/")[0]
-        print(f"AddressObject.value in correlateAddressToVlan Function: {addressObject.value}")
         for vlanNum, vlanCidr in vlanMap.items():
-            print(f"VLAN {vlanNum}: {vlanCidr}")
             if self.ipInCidr(cleanIp, str(vlanCidr)):
                 return vlanNum
         return None
@@ -272,15 +270,18 @@ or equivalent to it.
         #find matching addressObject for the given IP
         matchedObject = None
         for obj in self.addressObjects:
+            #Find exact match on address object name
             if obj.name == addressObjectName:
                 matchedObject = obj
                 break
         if not matchedObject:
             logging.error(f"No AddressObject found for name: {addressObjectName}")
             return None
+        #How to check all nested objects for a match when not based off ip? Take the IP of the found object and run the correlateIP type functions?
         
         correlationResult = {
-            "ip": matchedObject.value,
+            #Check for nested address objects once an IP is matched
+            "ip": self.correlateAddressObjects(matchedObject.value),
             "addressObject": [addressObjectName],
             "vlan": None,
             "zone": None,
@@ -403,9 +404,9 @@ or equivalent to it.
         Return all address objects that contain the inut IP
         This includes any exact matches and broader CIDR ranges
         """
+    
         matchingObjects = []
         for addr in self.addressObjects:
-            print(f"AddressObject.value in correlateAddressObjects Function: {addr.value} | IP Param: {ip}")
             if addr.value == ip or self.ipInCidr(ip, addr.value):
                 matchingObjects.append(addr)
         if not matchingObjects:
@@ -597,6 +598,12 @@ or equivalent to it.
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
 
+    # --- Export Utility Methods --- 
+    def exportAllVlans(self):
+        return self.vlanData
+    
+    def exportAllRules(self):
+        return self.deviceGroupRules
 
     # --- Lookup Methods Based on Different Input Types End Here ---
 
@@ -610,7 +617,7 @@ def testMethods(panData):
     if result:
         logging.info("Test correlation result for IP %s: %s", testIP, result)
     else:
-        logging.error("No correlation result found for IP: %s", testIP)
+        logging.error("No correlation result found for IP: %s", testIP)   
 
 def testZoneLookup(panData):
     """
