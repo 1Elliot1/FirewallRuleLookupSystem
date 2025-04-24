@@ -7,6 +7,8 @@ from panos.device import Vsys
 from panos.objects import AddressGroup, AddressObject, ServiceObject, ServiceGroup, ApplicationGroup, ApplicationObject, ApplicationContainer
 from panos.predefined import Predefined
 from dotenv import load_dotenv
+import json
+import pprint
 import ipaddress
 import os
 
@@ -48,7 +50,9 @@ class PanoramaData:
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
-        print(self.deviceGroupRules)
+        self.correlationMatrix = self.buildCorrelationMatrix()
+
+        self.exportCorrelationMatrixToFile()
 
     def collectDeviceGroupRules(self):
         """
@@ -670,11 +674,21 @@ or equivalent to it.
 
     # --- Export Utility Methods --- 
 
-    def exportAllVlans(self):
-        return self.vlanData
+    def exportAllVlansToFile(self):
+        jsonObj = json.dumps(self.vlanData, indent=4)
+        with open("vlanData.json", "w") as outfile:
+            outfile.write(jsonObj)
     
-    def exportAllRules(self):
-        return self.deviceGroupRules
+    def exportAllRulesToFile(self):
+        jsonObj = json.dumps(self.deviceGroupRules, indent=4)
+        with open("deviceGroupRules.json", "w") as outfile:
+            outfile.write(jsonObj)
+
+    
+    def exportCorrelationMatrixToFile(self, filename="correlationMatrix.json"):
+        jsonObj = json.dumps(self.correlationMatrix, indent=4)
+        with open(filename, "w") as outfile:
+            outfile.write(jsonObj)
 
     # --- Lookup Methods Based on Different Input Types End Here ---
 
@@ -725,7 +739,6 @@ def main():
     #build PanoramaData object
     panData = PanoramaData(pano)
 
-    testMethods(panData)
 
 if __name__ == "__main__":
     main()
