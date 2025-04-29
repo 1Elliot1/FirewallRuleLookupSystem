@@ -602,6 +602,46 @@ or equivalent to it.
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
     
+    def buildApplicationPortMap(self):
+        """
+        Builds two mappings:
+        1. applicationToPorts: {appName: {'tcp':[80, 443], 'udp': [53]}}
+        2. portToApplications: {'tcp/443': ['web-browsing', 'ssl'], udp/53: ['dns']}
+        """
+        from collections import defaultdict
+
+        applicationToPorts = {}
+        portToApplications = defaultdict(list)
+
+        allApps = self.applicationObject + list(self.predefinedApplicationObjects.values())
+
+        for app in allApps:
+            appName = app.name
+            ports = {'tcp': [], 'udp': []}
+
+            try:
+                if hasattr(app, 'default_port') and app.default:
+                    for proto, portlist in app.default.items():
+                        ports[proto] = portlist if isinstance(portlist, list) else [portlist]
+                if hasattr(app, 'tcp') and app.tcp:
+                    ports['tcp'].extend(app.tcp if isinstance(app.tcp, list) else [app.tcp])
+                if hasattr(app, 'udp') and app.udp:
+                    ports['udp'].extend(app.udp if isinstance(app.udp, list) else [app.udp])
+                
+                applicationToPorts[appName] = ports
+
+                #build reverse map
+                for proto, portlist in ports.items():
+                    for port in portlist:
+                        portKey = f"{proto}/{port}"
+                        portToApplications[portKey].append(appName)
+                
+            except Exception as e:
+                logging.error(f"Error processing application {appName}: {e}")
+
+        self.applicationToPorts = applicationToPorts
+        self.portToApplications = dict(portToApplications)
+
     def buildCorrelationMatrix(self):
         """
         Build a comprehensive mapping of all objects (address objects, VLANs, zones, etc.) 
@@ -610,6 +650,7 @@ or equivalent to it.
         """
         correlationMatrix = []
 
+        vlanCache = {}
         # --- Address Objects --- 
         for addr in self.addressObjects:
             entry = {
@@ -619,14 +660,17 @@ or equivalent to it.
                 "zone": None,
                 "vlan": None,
                 "parentGroups": self.correlateAddressToAddressGroup(addr) or [],
+                "parentAddressObjects": self.correlateAddressObjects(addr.value) or [],
             }
-
+            #change parentAddressObjects to simply their names for json output:
+            entry["parentAddressObjects"] = [obj.name for obj in entry["parentAddressObjects"]]
             #get VLAN/Zone from correlation
             for key, data in self.vlanData.items():
                 vlanMap = data.get("vlanMap", {})
                 zones = data.get("zones", [])
                 vlanNum = self.correlateAddressToVlan(addr, vlanMap)
                 if vlanNum:
+                    vlanCache.setdefault(vlanNum, []).append(addr.name)
                     entry["vlan"] = vlanNum
                     entry["zone"] = self.correlateVlanToZone(vlanNum, zones)
                     break
@@ -654,6 +698,7 @@ or equivalent to it.
                     "cidr": cidr,
                     "zone": self.correlateVlanToZone(vlanNum, zones),
                     "template": templateKey,
+                    "childAddressObjects": vlanCache.get(vlanNum, []),
                 }
                 correlationMatrix.append(entry)
 
@@ -717,6 +762,15 @@ def testZoneLookup(panData):
     else:
         logging.error("No correlation result found for zone: %s", testZone)
 
+def testApplicationPortMapping(panData):
+    panData.buildApplicationPortMap()
+
+    print("Ports for 'web-browsing':")
+    print(panData.applicationToPorts.get('web-browsing', "Not Found"))
+
+    print("Applications for port 'tcp/443':")
+    print(panData.portToApplications.get('tcp/443', "Not Found"))
+
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
     #than the rest of them. A couple in IC-Perimeter and the rest in IC-Datacenter.
@@ -738,7 +792,6 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
-
 
 if __name__ == "__main__":
     main()
