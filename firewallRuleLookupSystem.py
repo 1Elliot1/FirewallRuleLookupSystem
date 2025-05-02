@@ -52,7 +52,9 @@ class PanoramaData:
         self.collectVlanData()
 
         #self.correlationMatrix = self.buildCorrelationMatrix()
-        self.ruleMatrix = self.buildRuleMatrix()
+        #self.ruleMatrix = self.buildRuleMatrix()
+        self.buildApplicationServicePortMap()
+
         temp = self.serviceObjects[0]
         print(f"Service Object: {temp.name}, {temp.protocol}, {temp.source_port}, {temp.destination_port}")
         #temp2 = self.predefinedServiceObjects[0]
@@ -633,7 +635,13 @@ or equivalent to it.
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
     
-    def buildApplicationPortMap(self):
+    def buildApplicationServicePortMap(self):
+        """
+        Build mappings of: 
+        - Applications to their default ports (tcp/udp)
+        - Services to their defined ports (tcp/udp)
+        - Reverse: protocol/port to all applications/services that use it
+        """
         #TODO: Want to implement a function that takes app and service data, parses through it correctly, so we can 
         #eventually build a correlation matrix of all apps and services to their ports, and vice versa-- or some 
         #kind of solution that will allow us to search for a port and find all apps and services that apply to it
@@ -641,41 +649,45 @@ or equivalent to it.
 
         from collections import defaultdict
 
-        applicationToPorts = {}
-        portToApplications = defaultdict(list)
+        self.applicationToPorts = {}
+        self.serviceToPorts = {}
+        portToEntities = defaultdict(lambda: {"applications": [], "services": []})
 
+        # --- Application Objects ---
         allApps = self.applicationObject + list(self.predefinedApplicationObjects.values())
-        #Not the correct implementation, just keeping it here so you can see some of how the 
-        #api data is formatted. 
         for app in allApps:
             appName = app.name
-            ports = {'tcp': [], 'udp': []}
-            if app.default_port:
-                for port in app.default_port:
-                #TODO: Handle port ranges (denoted with a dash)
-                    if "/" in port:
-                        subCollection = []
-                        proto = port.split("/")[0]
-                        portNum = port.split("/")[1]
-                        if "," in port:
-                            subCollection = portNum.split(",")
+            ports = {"tcp": [], "udp": []}
 
-                    if proto == "tcp":
-                        if subCollection:
-                            ports['tcp'].extend(subCollection)
-                        else:
-                            ports['tcp'].append(portNum)
-                    elif proto == "udp":
-                        if subCollection:
-                            ports['udp'].extend(subCollection)
-                        else:
-                            ports['udp'].append(portNum)
-                
-                applicationToPorts[appName] = ports
+            if hasattr(app, "default_port") and app.default_port:
+                for entry in app.default_port:
+                    try:
+                        proto, portBlob = entry.split("/")
+                        proto = proto.lower()
+                        for part in portBlob.split(","):
+                            ports[proto].append(part.strip())
+                            portToEntities[f"{proto}/{part.strip()}"]["applications"].append(appName)
+                    except Exception as e:
+                        logging.warning(f"Error parsing application port: {entry}, {e}")
+
+            self.applicationToPorts[appName] = ports
+
+        # --- Service Objects ---
+        allServices = self.serviceObjects + list(self.predefinedServiceObjects.values())
+
+        for service in allServices:
+            #Only handles destination ports for now-- is that correct?
+            serviceName = service.name
+            protocol = service.protocol.lower() if service.protocol else None
+            destPort = service.destination_port if service.destination_port else None
+
+            if protocol and destPort:
+                self.serviceToPorts[serviceName] = {protocol: [destPort]}
+                portToEntities[f"{protocol}/{destPort}"]["services"].append(serviceName)
+        
+        self.portToEntities = dict(portToEntities)
 
 
-        self.applicationToPorts = applicationToPorts
-        self.portToApplications = dict(portToApplications)
 
     def buildCorrelationMatrix(self):
         """
@@ -782,7 +794,16 @@ or equivalent to it.
     def exportAllAppServiceObjectsToFile(self):
         #TODO: implement a solution that eventually will allow user to search for a specific protocol/port and return all apps and services that apply to it (so the rules that apply to those services and apps can then be correlated to that)
         #TODO: Once implemented, implement this method to export the data to a similarly formatted file as the others 
-        pass
+        mapping = {
+            "applications": self.applicationToPorts,
+            "services": self.serviceToPorts,
+            "ports": self.portToEntities
+        }
+
+        with open("appServiceMapping.json", "w") as outfile:
+            json.dump(mapping, outfile, indent=4)
+        logging.info("Exported application/service mapping to appServiceMapping.json")
+            
 
     def exportAllVlansToFile(self):
         #TODO: Take the current vlanData collection and format it with a build function, then export it to a file here similarlly formatted as the others below
@@ -856,7 +877,7 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
-    panData.exportAllRulesToFile()
+    panData.exportAllAppServiceObjectsToFile()
 
 if __name__ == "__main__":
     main()
