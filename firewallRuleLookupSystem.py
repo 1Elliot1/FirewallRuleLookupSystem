@@ -50,9 +50,31 @@ class PanoramaData:
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
-        self.correlationMatrix = self.buildCorrelationMatrix()
 
-        self.exportCorrelationMatrixToFile()
+        #self.correlationMatrix = self.buildCorrelationMatrix()
+        self.ruleMatrix = self.buildRuleMatrix()
+        temp = self.serviceObjects[0]
+        print(f"Service Object: {temp.name}, {temp.protocol}, {temp.source_port}, {temp.destination_port}")
+        #temp2 = self.predefinedServiceObjects[0]
+        #print(f"Predefined Service Object: {temp2.name}, {temp2.protocol}, {temp2.source_port}, {temp2.destination_port}")
+        # print("\n1:\n")
+        # print(self.predefinedServiceObjects)
+        # print("\n2:\n ***")
+        # print("\n3:\n ****")
+        # print(self.predefinedObjectContainers)
+        # print("\n4:\n")
+        # print(self.serviceGroups)
+        # print("\n5:\n")
+        # print(self.applicationContainers)
+        # print("\n6:\n")
+        # print(self.applicationGroup )
+        # print("\n7:\n")
+        # print(self.applicationObject)
+        print(f"{self.predefinedApplicationObjects['oracle'].name}: {self.predefinedApplicationObjects['oracle'].default_port}, {self.predefinedApplicationObjects['oracle'].default_ip_protocol}, {self.predefinedApplicationObjects['oracle'].category}, {self.predefinedApplicationObjects['oracle'].subcategory}, {self.predefinedApplicationObjects['oracle'].technology}")
+        print(f"{self.predefinedApplicationObjects['active-directory-base'].name}: {self.predefinedApplicationObjects['active-directory-base'].default_port}, {self.predefinedApplicationObjects['active-directory-base'].default_ip_protocol}, {self.predefinedApplicationObjects['active-directory-base'].category}, {self.predefinedApplicationObjects['active-directory-base'].subcategory}, {self.predefinedApplicationObjects['active-directory-base'].technology}")
+
+        
+        #TODO: When you come back, find out how to access the correct attributes for services, predef services, service groups, apps, predef apps, app groups, etc. to fill in the entries "protocol", "port", "app name", "service name", and maybe "default port" for each item in any of those objects
 
     def collectDeviceGroupRules(self):
         """
@@ -421,6 +443,8 @@ or equivalent to it.
         return matchingObjects
 
     def fullCorrelationLookup(self, inputValue):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
+        #All correlation should now occur in the exported files. 
         """
         High-level method:
          1. Correlate the input to known objects.
@@ -439,6 +463,7 @@ or equivalent to it.
     # --- !!! Lookup Methods Based on Different Input Types Start Here !!! ---
 
     def lookupRulesBySubnet(self, subnet):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
         """
         Lookup rules that apply to the given subnet.
         TODO: Implement logic to match rules based on subnet overlap.
@@ -458,6 +483,7 @@ or equivalent to it.
         return correlationResult
 
     def lookupRulesByApplication(self, applicationName):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
         """
         Lookup rules that reference the given application.
         TODO: Implement logic to match rules by application.
@@ -476,6 +502,7 @@ or equivalent to it.
         return correlationResult
 
     def lookupRulesByZone(self, zone):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
         """
         Lookup rules that apply to the given zone.
         """
@@ -514,6 +541,8 @@ or equivalent to it.
         return list(parentGroups)
 
     def lookupRulesByAddressGroup(self, addressGroupName):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
+
         """
         Lookup rules that apply to the given address group.
         """
@@ -535,6 +564,7 @@ or equivalent to it.
         return correlationResult
 
     def lookupRulesByVlan(self, vlanNum):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
         """
         Lookup rules that apply to the given VLAN number
         Method uses the vlanData mapping to correlate VLAN to its CIDR range and associated zones,
@@ -562,6 +592,7 @@ or equivalent to it.
         return correlationResult
 
     def lookupRulesByCIDR(self, CIDR):
+        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
         """
         Lookup rules that apply to the given CIDR range.
         This method checks if provided CIDR overlaps with any of the VLAN CIDR ranges or address objects
@@ -603,41 +634,45 @@ or equivalent to it.
         return correlationResult
     
     def buildApplicationPortMap(self):
-        """
-        Builds two mappings:
-        1. applicationToPorts: {appName: {'tcp':[80, 443], 'udp': [53]}}
-        2. portToApplications: {'tcp/443': ['web-browsing', 'ssl'], udp/53: ['dns']}
-        """
+        #TODO: Want to implement a function that takes app and service data, parses through it correctly, so we can 
+        #eventually build a correlation matrix of all apps and services to their ports, and vice versa-- or some 
+        #kind of solution that will allow us to search for a port and find all apps and services that apply to it
+        #so that can be used to search for rules that apply to those protocols/ports/apps/services
+
         from collections import defaultdict
 
         applicationToPorts = {}
         portToApplications = defaultdict(list)
 
         allApps = self.applicationObject + list(self.predefinedApplicationObjects.values())
-
+        #Not the correct implementation, just keeping it here so you can see some of how the 
+        #api data is formatted. 
         for app in allApps:
             appName = app.name
             ports = {'tcp': [], 'udp': []}
+            if app.default_port:
+                for port in app.default_port:
+                #TODO: Handle port ranges (denoted with a dash)
+                    if "/" in port:
+                        subCollection = []
+                        proto = port.split("/")[0]
+                        portNum = port.split("/")[1]
+                        if "," in port:
+                            subCollection = portNum.split(",")
 
-            try:
-                if hasattr(app, 'default_port') and app.default:
-                    for proto, portlist in app.default.items():
-                        ports[proto] = portlist if isinstance(portlist, list) else [portlist]
-                if hasattr(app, 'tcp') and app.tcp:
-                    ports['tcp'].extend(app.tcp if isinstance(app.tcp, list) else [app.tcp])
-                if hasattr(app, 'udp') and app.udp:
-                    ports['udp'].extend(app.udp if isinstance(app.udp, list) else [app.udp])
+                    if proto == "tcp":
+                        if subCollection:
+                            ports['tcp'].extend(subCollection)
+                        else:
+                            ports['tcp'].append(portNum)
+                    elif proto == "udp":
+                        if subCollection:
+                            ports['udp'].extend(subCollection)
+                        else:
+                            ports['udp'].append(portNum)
                 
                 applicationToPorts[appName] = ports
 
-                #build reverse map
-                for proto, portlist in ports.items():
-                    for port in portlist:
-                        portKey = f"{proto}/{port}"
-                        portToApplications[portKey].append(appName)
-                
-            except Exception as e:
-                logging.error(f"Error processing application {appName}: {e}")
 
         self.applicationToPorts = applicationToPorts
         self.portToApplications = dict(portToApplications)
@@ -716,16 +751,45 @@ or equivalent to it.
             correlationMatrix.append(entry)
 
         return correlationMatrix
+    
+    def buildRuleMatrix(self):
+        ruleMatrix = []
+        for dg in self.deviceGroupRules:
+            print(dg)
+            for ruleType in self.deviceGroupRules[dg]:
+                print(ruleType)
+                for rule in self.deviceGroupRules[dg][ruleType]:
+                    entry = {
+                        "type": ruleType,
+                        "name": getattr(rule, "name", None),
+                        "deviceGroup": dg,
+                        "source": getattr(rule, "source", None),
+                        "destination": getattr(rule, "destination", None),
+                        "action": getattr(rule, "action", None),
+                        "service": getattr(rule, "service", None),
+                        "application": getattr(rule, "application", None),
+                        "fromzone": getattr(rule, "fromzone", None),
+                        "tozone": getattr(rule, "tozone", None),
+                        "sourceDevices": getattr(rule, "source_devices", None),
+                        "destinationDevices": getattr(rule, "destination_devices", None),
+                        "description": getattr(rule, "description", None),
+                    }
+                    ruleMatrix.append(entry)
 
+        return ruleMatrix
+    
     # --- Export Utility Methods --- 
+    def exportAllAppServiceObjectsToFile(self):
+        #TODO: implement a solution that eventually will allow user to search for a specific protocol/port and return all apps and services that apply to it (so the rules that apply to those services and apps can then be correlated to that)
+        #TODO: Once implemented, implement this method to export the data to a similarly formatted file as the others 
+        pass
 
     def exportAllVlansToFile(self):
-        jsonObj = json.dumps(self.vlanData, indent=4)
-        with open("vlanData.json", "w") as outfile:
-            outfile.write(jsonObj)
+        #TODO: Take the current vlanData collection and format it with a build function, then export it to a file here similarlly formatted as the others below
+        pass
     
     def exportAllRulesToFile(self):
-        jsonObj = json.dumps(self.deviceGroupRules, indent=4)
+        jsonObj = json.dumps(self.ruleMatrix, indent=4)
         with open("deviceGroupRules.json", "w") as outfile:
             outfile.write(jsonObj)
 
@@ -792,6 +856,7 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
+    panData.exportAllRulesToFile()
 
 if __name__ == "__main__":
     main()
