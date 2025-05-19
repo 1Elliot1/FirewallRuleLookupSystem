@@ -51,33 +51,10 @@ class PanoramaData:
         self.collectDeviceGroupRules()
         self.collectVlanData()
 
-        #self.correlationMatrix = self.buildCorrelationMatrix()
-        #self.ruleMatrix = self.buildRuleMatrix()
         self.buildApplicationServicePortMap()
-
-        temp = self.serviceObjects[0]
-        print(f"Service Object: {temp.name}, {temp.protocol}, {temp.source_port}, {temp.destination_port}")
-        #temp2 = self.predefinedServiceObjects[0]
-        #print(f"Predefined Service Object: {temp2.name}, {temp2.protocol}, {temp2.source_port}, {temp2.destination_port}")
-        # print("\n1:\n")
-        # print(self.predefinedServiceObjects)
-        # print("\n2:\n ***")
-        # print("\n3:\n ****")
-        # print(self.predefinedObjectContainers)
-        # print("\n4:\n")
-        # print(self.serviceGroups)
-        # print("\n5:\n")
-        # print(self.applicationContainers)
-        # print("\n6:\n")
-        # print(self.applicationGroup )
-        # print("\n7:\n")
-        # print(self.applicationObject)
-        print(f"{self.predefinedApplicationObjects['oracle'].name}: {self.predefinedApplicationObjects['oracle'].default_port}, {self.predefinedApplicationObjects['oracle'].default_ip_protocol}, {self.predefinedApplicationObjects['oracle'].category}, {self.predefinedApplicationObjects['oracle'].subcategory}, {self.predefinedApplicationObjects['oracle'].technology}")
-        print(f"{self.predefinedApplicationObjects['active-directory-base'].name}: {self.predefinedApplicationObjects['active-directory-base'].default_port}, {self.predefinedApplicationObjects['active-directory-base'].default_ip_protocol}, {self.predefinedApplicationObjects['active-directory-base'].category}, {self.predefinedApplicationObjects['active-directory-base'].subcategory}, {self.predefinedApplicationObjects['active-directory-base'].technology}")
-
+        self.correlationMatrix = self.buildCorrelationMatrix()
+        self.ruleMatrix = self.buildRuleMatrix()
         
-        #TODO: When you come back, find out how to access the correct attributes for services, predef services, service groups, apps, predef apps, app groups, etc. to fill in the entries "protocol", "port", "app name", "service name", and maybe "default port" for each item in any of those objects
-
     def collectDeviceGroupRules(self):
         """
         Refresh rules for each device group
@@ -265,8 +242,6 @@ or equivalent to it.
             "zone": None,
             "addressGroup": None,
             "matchingRules": []
-            #"applications": None,
-            #"services": None
         }
         #MAD INNEFICIENT WOWIEEEE
         for obj in matchedObjects:
@@ -315,8 +290,6 @@ or equivalent to it.
             "zone": None,
             "addressGroup": None,
             "matchingRules": []
-            #"applications": None,
-            #"services": None
         }
         #check each vlanData bucket until a matching VLAN is found
         for key, data in self.vlanData.items():
@@ -440,9 +413,48 @@ or equivalent to it.
         if not matchingObjects:
             logging.error(f"No AddressObject found for IP: {ip}")
             return None
-
         
         return matchingObjects
+
+    def enrichRuleWithPorts(self, apps, services, serviceFieldRaw):
+        """
+        Resolve all ports a rule allows and annotate with reasoning
+        apps and services must be fully resolved (i.e., no groups by calling resolveAppAndServiceGroups)
+        serviceFieldRaw is the raw service field is the original rule.service list
+        """
+        resolvedPorts = set()
+        portReasoning = {}
+
+        #handle applicationDefault logic:
+        if serviceFieldRaw and len(serviceFieldRaw) == 1 and serviceFieldRaw[0] == "application-default":
+            for app in apps:
+                portMap = self.applicationToPorts.get(app, {})
+                if not portMap:
+                    print(f"Warning: No port mapping found for application '{app}'")
+                for proto, ports in portMap.items():
+                    for port in ports:
+                        key = f"{proto}/{port}"
+                        resolvedPorts.add(key)
+                        portReasoning.setdefault(key, []).append(f"{app} (application-default)")
+
+        for service in services:
+            if service == "application-default":
+                # Skip application-default as it is handled above
+                continue
+
+            servicePorts = self.serviceToPorts.get(service, {})
+            for proto, ports in servicePorts.items():
+                for port in ports:
+                    key = f"{proto}/{port}"
+                    resolvedPorts.add(key)
+                    portReasoning.setdefault(key, []).append(f"{service} (service object)")
+
+        return {
+            "resolvedPorts": list(resolvedPorts),
+            "portReasoning": portReasoning
+        }
+
+    # --- Lookup Methods Start Here | Likely to Remove ---
 
     def fullCorrelationLookup(self, inputValue):
         #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
@@ -460,9 +472,6 @@ or equivalent to it.
         # correlationResult = self.correlateServices(correlationResult)
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
-
-    # --- Basic Rule Lookup Methods End Here ---
-    # --- !!! Lookup Methods Based on Different Input Types Start Here !!! ---
 
     def lookupRulesBySubnet(self, subnet):
         #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
@@ -525,22 +534,6 @@ or equivalent to it.
         }
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
-    
-    def resolveNestedAddressGroups(self, addressGroupName, seen = None):
-        """
-        Recursively resolve nested address groups.
-        """
-        if seen is None:
-            seen = set()
-        parentGroups = set()
-        for group in self.addressGroups:
-            if hasattr(group, "static_value"):
-                if addressGroupName in group.static_value and group.name not in seen:
-                    seen.add(group.name)
-                    parentGroups.add(group.name)
-                    # Recursively resolve nested groups
-                    parentGroups.update(self.resolveNestedAddressGroups(group.name, seen))
-        return list(parentGroups)
 
     def lookupRulesByAddressGroup(self, addressGroupName):
         #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
@@ -634,6 +627,85 @@ or equivalent to it.
                 logging.error(f"Invalid address object value: {addr.value}")
         correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
         return correlationResult
+
+# --- Lookup Methods End Here | Likely to Remove ---    
+
+    def resolveNestedAddressGroups(self, addressGroupName, seen = None):
+        """
+        Recursively resolve nested address groups.
+        """
+        if seen is None:
+            seen = set()
+        parentGroups = set()
+        for group in self.addressGroups:
+            if hasattr(group, "static_value"):
+                if addressGroupName in group.static_value and group.name not in seen:
+                    seen.add(group.name)
+                    parentGroups.add(group.name)
+                    # Recursively resolve nested groups
+                    parentGroups.update(self.resolveNestedAddressGroups(group.name, seen))
+        return list(parentGroups)
+    
+    def resolveApplicationGroup(self, groupName):
+        """
+        Returns the list of application names in an application group
+        """
+        #TODO: Double check your logic on this, do you only want to return the names of apps in the groups, or correlate all of the info within each element of the group to the parent group?
+        for group in self.applicationGroup:
+            if group.name == groupName:
+                return group.value if hasattr(group, "value") else []
+        return []
+    
+    def resolveServiceGroup(self, groupName):
+        """
+        Returns the list of service names in a service group
+        """
+        #TODO: Double check your logic on this, do you only want to return the names of services in the groups, or correlate all of the info within each element of the group to the parent group?
+        for group in self.serviceGroups:
+            if group.name == groupName:
+                return group.value if hasattr(group, "value") else []
+        return []
+    
+    def resolveApplicationContainer(self, containerName):
+        for container in self.applicationContainers.get(containerName):
+            if container and hasattr(container, "value"):
+                return container.value or []
+        return []
+    
+    def resolvePredefinedContainer(self, containerName):
+        container = self.predefinedObjectContainers.get(containerName)
+        if container and hasattr(container, "value"):
+            return container.value or []
+        return []
+    
+    def resolveAppAndServiceGroups(self, apps, services):
+        """
+        Given raw app/service lists, resolve all groups into flat lists of its members
+        Returns: allApps, allServices
+        """
+
+        resolvedApps = set()
+        resolvedServices = set()
+
+        for app in apps or []:
+            #if current app is a group, resovlve it to its memebers and add to all apps
+            if app in [group.name for group in self.applicationGroup]:
+                resolvedApps.update(self.resolveApplicationGroup(app))
+            elif app in self.applicationContainers:
+                resolvedApps.update(self.resolveApplicationContainer(app))
+            elif app in self.predefinedObjectContainers:
+                resolvedApps.update(self.resolvePredefinedContainer(app))
+            else:
+                resolvedApps.add(app)
+
+        for service in services or []:
+            #if current service is a group, resovlve it to its memebers and add to all services
+            if service in [group.name for group in self.serviceGroups]:
+                resolvedServices.update(self.resolveServiceGroup(service))
+            else:
+                resolvedServices.add(service)
+
+        return list(resolvedApps), list(resolvedServices)
     
     def buildApplicationServicePortMap(self):
         """
@@ -765,27 +837,41 @@ or equivalent to it.
         return correlationMatrix
     
     def buildRuleMatrix(self):
+        """
+        Builds a matrix of all rules with consolidated data, including apps/services/ports correlation
+        """
         ruleMatrix = []
         for dg in self.deviceGroupRules:
-            print(dg)
             for ruleType in self.deviceGroupRules[dg]:
-                print(ruleType)
                 for rule in self.deviceGroupRules[dg][ruleType]:
+                    rawApps = getattr(rule, "application", []) or []
+                    rawServices = getattr(rule, "service", []) or []
+
+                    #expand all service and application groups into their members: 
+                    allApps, allServices = self.resolveAppAndServiceGroups(rawApps, rawServices)
+
+                    enriched = self.enrichRuleWithPorts(allApps, allServices, rawServices)
+                    
                     entry = {
                         "type": ruleType,
                         "name": getattr(rule, "name", None),
                         "deviceGroup": dg,
                         "source": getattr(rule, "source", None),
                         "destination": getattr(rule, "destination", None),
-                        "action": getattr(rule, "action", None),
-                        "service": getattr(rule, "service", None),
-                        "application": getattr(rule, "application", None),
                         "fromzone": getattr(rule, "fromzone", None),
                         "tozone": getattr(rule, "tozone", None),
                         "sourceDevices": getattr(rule, "source_devices", None),
                         "destinationDevices": getattr(rule, "destination_devices", None),
+                        "action": getattr(rule, "action", None),
+                        "service": rawServices,
+                        "application": rawApps,
+                        "expandedApplications": allApps,
+                        "expandedServices": allServices,
+                        "resolvedPorts": enriched["resolvedPorts"],
+                        "portReasoning": enriched["portReasoning"],
                         "description": getattr(rule, "description", None),
                     }
+
                     ruleMatrix.append(entry)
 
         return ruleMatrix
@@ -877,7 +963,10 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
+    panData.buildApplicationServicePortMap()
+    panData.exportAllRulesToFile()
     panData.exportAllAppServiceObjectsToFile()
+    panData.exportCorrelationMatrixToFile()
 
 if __name__ == "__main__":
     main()
