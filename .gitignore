@@ -2,3 +2,7 @@
 text
 *.txt
 *.json
+*.ndjson
+__pycache__
+*.pyc
+out

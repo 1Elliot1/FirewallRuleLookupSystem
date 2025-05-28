@@ -1,0 +1,503 @@
+"""Panorama inventory & correlation layer
+
+Wraps the pan‑os‑python calls, builds fast look‑up maps, expands groups /
+containers and flattens data to be structured elswhere 
+
+Usage
+~~~~~
+```python
+from panos.panorama import Panorama
+from panoramaData import PanoramaData
+from ruleDocumentBuilder import buildRuleDocuments
+
+pano = Panorama(hostname, api_key=key)
+inventory  = PanoramaData(pano)
+
+ruleDocs = buildRuleDocs(inventory)
+```
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import logging
+from collections import defaultdict
+from functools import lru_cache
+from typing import Dict, List, Set, Tuple
+
+from panos.panorama import Panorama, DeviceGroup, Template
+from panos.policies import (
+    PreRulebase,
+    PostRulebase,
+    Rulebase,
+    SecurityRule,
+    NatRule,
+    ApplicationOverride,
+    PolicyBasedForwarding,
+    DecryptionRule,
+    AuthenticationRule,
+)
+from panos.network import (
+    AggregateInterface,
+    Layer3Subinterface,
+    Vlan,
+    Zone,
+)
+from panos.device import Vsys
+from panos.objects import (
+    AddressObject,
+    AddressGroup,
+    ServiceObject,
+    ServiceGroup,
+    ApplicationObject,
+    ApplicationGroup,
+    ApplicationContainer,
+)
+from panos.predefined import Predefined
+
+_LOG = logging.getLogger("panoramaData")
+
+# ---------------------------------------------------------------------------
+#  Setup/Helpers
+# ---------------------------------------------------------------------------
+
+
+RULE_TYPES = (
+    SecurityRule,
+    NatRule,
+    ApplicationOverride,
+    PolicyBasedForwarding,
+    DecryptionRule,
+    AuthenticationRule,
+)
+
+RULEBASE_CLASSES = (PreRulebase, Rulebase, PostRulebase)
+
+#lru_cache to speed up repeated lookups
+#TODO: Look into the lru_cache decorator to see how it works/what it exactly does
+@lru_cache(maxsize=None)
+def _ip_in_cidr(ip: str, cidr: str) -> bool:
+    try:
+        network = ipaddress.ip_network(cidr.strip("'[]"), strict=False)
+        if network.prefixlen == 0:  # Skip 0.0.0.0/0 catch‑alls
+            return False
+    except ValueError:
+        return False
+
+    try:
+        #TODO: Ensure that this does not crash when comparing an IPV4 to IPV6
+        #TODO: Ensure that this does not crash and/or behaves as expected (True) when the input IP is equivalent to the CIDR
+        if "/" in ip:  # ip might actually be a CIDR
+            subject = ipaddress.ip_network(ip, strict=False)
+            return subject.subnet_of(network) and subject.prefixlen >= network.prefixlen
+        return ipaddress.ip_address(ip) in network
+    except ValueError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+#  PanoramaData Class (Collect and Correlate PanOS Objects)
+# ---------------------------------------------------------------------------
+
+class PanoramaData:
+    """
+    Collects desired objects from Panorama and prepares fast lookup maps
+    (can plug in whatever builder script you want onto this output)
+    """
+
+    # Public attrs that callers may read ---------------------------
+    addressObjects: List[AddressObject]
+    addressGroups:  List[AddressGroup]
+    serviceObjects: List[ServiceObject]
+    serviceGroups:  List[ServiceGroup]
+    applicationObjects: List[ApplicationObject]
+    applicationGroups: List[ApplicationGroup]
+    applicationContainers: List[ApplicationContainer]
+
+    # Fast lookup dicts -------------------------------------------
+    addressObjectByName: Dict[str, AddressObject]
+    addressGroupByName: Dict[str, AddressGroup]
+    serviceGroupByName: Dict[str, ServiceGroup]
+    appGroupByName: Dict[str, ApplicationGroup]
+    appContainerByName: Dict[str, ApplicationContainer]
+    predefContainerByName: Dict[str, ApplicationContainer]
+    leafAppNames: Set[str]
+
+    # Misc ---------------------------------------------------------
+    deviceGroupRules: Dict[str, Dict[str, List]]
+    vlanData: Dict[str, Dict]
+    applicationToPorts: Dict[str, Dict[str, List[str]]]
+    serviceToPorts: Dict[str, Dict[str, List[str]]]
+    portToEntities: Dict[str, Dict[str, List[str]]]
+
+    def __init__(self, pano: Panorama) -> None:
+        self.pano = pano
+        self._refreshPanoramaInventory()
+        self._buildFastMaps()
+
+        self.deviceGroupRules: Dict[str, Dict[str, List]] = {}
+        self.vlanData: Dict[str, Dict] = {}
+
+        self._collectDeviceGroupRules()
+        self._collectVlanData()
+        self._buildApplicationServicePortMaps()
+
+    # ------------------------------------------------------------------
+    #  Public convenience methods (thin wrappers around maps)
+    # ------------------------------------------------------------------
+
+    def addressGroupsForObject(self, obj: AddressObject) -> List[str] | None:
+        """Return *all* groups (incl. nested parents) that contain *obj*."""
+        return self._addrToGroup.get(obj.name)
+
+    # ------------------------------------------------------------------
+    #  Inventory collection helpers
+    # ------------------------------------------------------------------
+
+    def _refreshPanoramaInventory(self) -> None:
+        """Grab **everything** from Panorama into lists."""
+        _LOG.info("Refreshing Panorama inventory …")
+
+        self.addressObjects       = AddressObject.refreshall(self.pano)
+        self.addressGroups        = AddressGroup.refreshall(self.pano)
+        self.deviceGroups         = DeviceGroup.refreshall(self.pano)
+        self.templates             = Template.refreshall(self.pano)
+        self.applicationObjects   = ApplicationObject.refreshall(self.pano)
+        self.applicationGroups    = ApplicationGroup.refreshall(self.pano)
+        self.applicationContainers = ApplicationContainer.refreshall(self.pano)
+        self.serviceObjects       = ServiceObject.refreshall(self.pano)
+        self.serviceGroups        = ServiceGroup.refreshall(self.pano)
+
+        # Pre‑defined apps & services (content DB)
+        predef = Predefined(self.pano)
+        predef.refreshall_applications()
+        predef.refreshall_services()
+        self._predefAppObjects       = predef.application_objects
+        self.predefContainerByName  = predef.application_container_objects
+        self._predefServiceObjects   = predef.service_objects
+
+    def _buildFastMaps(self) -> None:
+        """Prepare O(1) look‑up maps used later in correlations."""
+        #TODO: Determine how to handle predefined objects. Don't seem to be added to the main maps, although much of the applications in pano are predefined
+        self.addressObjectByName   = {o.name: o for o in self.addressObjects}
+        self.addressGroupByName = {g.name: g for g in self.addressGroups}
+        self.serviceGroupByName = {g.name: g for g in self.serviceGroups}
+        self.appGroupByName     = {g.name: g for g in self.applicationGroups}
+        self.appContainerByName = {c.name: c for c in self.applicationContainers}
+        self.leafAppNames        = {a.name for a in self.applicationObjects}
+
+        # Address to group mapping
+        # This is a map of address object names to the groups they belong to (key is the address object name, value is a list of group names)
+        addr2grp: Dict[str, Set[str]] = defaultdict(set)
+        for grp in self.addressGroups:
+            for member in getattr(grp, "static_value", []):
+                addr2grp[member].add(grp.name)
+        self._addrToGroup: Dict[str, List[str]] = {
+            k: sorted(v) for k, v in addr2grp.items()
+        }
+
+        # Cache to avoid re‑expanding the same app group 1000× --------
+        self._expandedAppGroupCache: Dict[str, List[str]] = {}
+
+    # ------------------------------------------------------------------
+    #  Rule handling
+    #  (collect rules from all device groups/templates)
+    # ------------------------------------------------------------------
+
+
+    def _collectDeviceGroupRules(self) -> None:
+        """Fetch ONLY the pre-rulebase slice, creating the wrapper if absent."""
+        from collections import defaultdict
+
+        total = 0
+        for dg in self.deviceGroups:
+            # (1) Get or create the <pre-rulebase> node
+            pre_rb = dg.find(PreRulebase)
+            if pre_rb is None:
+                pre_rb = PreRulebase()          # ← your original two lines
+                dg.add(pre_rb)
+
+            # (2) Pull every rule type
+            bucket: Dict[str, List] = defaultdict(list)
+            for rt in RULE_TYPES:
+                rules = rt.refreshall(pre_rb)
+                bucket[rt.__name__] = rules
+                total += len(rules)
+
+            self.deviceGroupRules[dg.name] = bucket
+
+        _LOG.info(
+            "Collected %d pre-rulebase rules across %d device groups",
+            total, len(self.deviceGroupRules),
+        )
+
+    # ------------------------------------------------------------------
+    #  VLAN and Zone handling
+    # ------------------------------------------------------------------
+
+    def _collectVlanData(self) -> None:
+        """
+        Populate self.vlanData with VLAN -> CIDR + Zone list per template
+        """
+        for tmpl in self.templates:
+            for vsys in tmpl.findall(Vsys):
+                zones = vsys.findall(Zone)
+                aggIfaces = tmpl.findall(AggregateInterface)
+
+                vlanMap: Dict[str, str] = {}
+                for agg in aggIfaces:
+                    #TODO: Figure out if you need to handle any othercases of subinterfaces (Not layer3-- Unsure if these exist in our env)
+                    for subif in agg.findall(Layer3Subinterface):
+                        try:
+                            #Create a mapping of VLAN numbers to their associated IP ranges
+                            #!Assumes that subinterface name format is <name>.<vlanNumber>
+                            #TODO: Figure out if there is a way to handle naming conventions that do not follow this, even though it works for this env for now 
+                            vlan, ipCidr = subif.name.split(".")[1], subif.ip
+                            vlanMap[vlan] = ipCidr
+                        except (IndexError, AttributeError):
+                            _LOG.warning("Cannot parse VLAN from %s", subif.name)
+                if vlanMap:
+                    key = f"{tmpl.name}-{vsys.name}"
+                    self.vlanData[key] = {"vlanMap": vlanMap, "zones": zones}
+
+        _LOG.info("Collected VLAN data for %d template/vsys combos", len(self.vlanData))
+
+    # ------------------------------------------------------------------
+    #  Applications and Services to Ports Mapping 
+    # ------------------------------------------------------------------
+
+    def _buildApplicationServicePortMaps(self) -> None:
+        self.applicationToPorts: Dict[str, Dict[str, List[str]]] = {}
+        self.serviceToPorts: Dict[str, Dict[str, List[str]]] = {}
+        portToEntities: Dict[str, Dict[str, List[str]]] = defaultdict(lambda: {
+            "applications": [],
+            "services": [],
+        })
+
+        # ---- Applications -----------------------------------------
+
+        for app in self.applicationObjects + list(self._predefAppObjects.values()):
+            ports: Dict[str, List[str]] = defaultdict(list)
+
+            for entry in getattr(app, "default_port", []) or []:
+                try:
+                    proto, blob = entry.split("/")
+                    proto_lc = proto.lower()
+                    if proto_lc not in {"tcp", "udp", "icmp"}:
+                        continue
+
+                    for part in blob.split(","):
+                        part = part.strip()
+                        ports[proto_lc].append(part)
+                        portToEntities[f"{proto_lc}/{part}"]["applications"].append(app.name)
+                except ValueError:
+                    _LOG.debug("Cannot parse app port entry: %s", entry)
+            self.applicationToPorts[app.name] = ports
+
+        # ---- Services ---------------------------------------------
+        for svc in self.serviceObjects + list(self._predefServiceObjects.values()):
+            if not (svc.protocol and svc.destination_port):
+                continue
+            proto = svc.protocol.lower()
+            if proto not in {"tcp", "udp", "icmp"}:
+                continue 
+            self.serviceToPorts[svc.name] = {proto: [svc.destination_port]}
+            portToEntities[f"{proto}/{svc.destination_port}"]["services"].append(svc.name)
+
+        self.portToEntities = dict(portToEntities)
+        _LOG.info("Port maps built: %d apps, %d services", len(self.applicationToPorts), len(self.serviceToPorts))
+
+    # ------------------------------------------------------------------
+    #  Public helpers reused by ruleDocumentBuiilder (or whatever other script you decide to plug into this)
+    # ------------------------------------------------------------------
+
+    def expandAddressGroups(self, groupName: str) -> List[str]:
+        """
+        Return all nested members (recursively) of an Address Group
+        """
+        #TODO: Determine if this still maintains the groups that are impacted by a rule, or strictly all of the leaf objects they resolve to
+        #!If it only resolves to leave objects, figure out if that is the desired behavior
+        stack = [groupName]
+        leaves: Set[str] = set()
+        seen: Set[str] = set()
+        while stack:
+            g = stack.pop()
+            if g in seen:
+                continue
+            seen.add(g)
+            grp = self.addressGroupByName.get(g)
+            if not grp:
+                continue
+            for member in getattr(grp, "static_value", []):
+                # If the member is another group, add it to the stack for further expansion
+                if member in self.addressGroupByName:
+                    stack.append(member)
+                else:
+                    # Otherwise, it's a leaf address object
+                    leaves.add(member)
+        
+        return list(leaves)
+
+    # ---- Application and Service Expansion -------------------------
+
+    def resolveAppAndServiceGroups(
+        self,
+        apps: List[str] | None,
+        services: List[str] | None,
+    ) -> Tuple[List[str], List[str]]:
+        
+        """
+        Entry point used by ruleDocumentBuilder
+        """
+        
+        return (
+            self._expandApplications(apps or []),
+            self._expandServices(services or []),
+        )
+
+    # Private Methods for resolving applications and services..........
+
+    def _expandApplications(self, candidates: List[str]) -> List[str]:
+        resolved: List[str] = []
+        for app in candidates:
+            if app == "application-default":
+                resolved.append(app)
+            elif app in self.leafAppNames:
+                resolved.append(app)
+            elif app in self.appGroupByName:
+                resolved.extend(self._expandAppGroup(app))
+            elif app in self.appContainerByName:
+            #TODO: Containers, especially predefined ones are not currently being handled correctly
+            #!Must figure out how to correctly handle and resolve containers to their leaf applications
+                resolved.extend(self._expandAppContainer(app))
+            elif app in self.predefContainerByName:
+                resolved.extend(self._expandPredefContainer(app))
+            else:
+                resolved.append(app)
+        # preserve order but dedupe
+        return list(dict.fromkeys(resolved))
+
+    def _expandServices(self, svcs: List[str]) -> List[str]:
+        resolved: Set[str] = set()
+        for svc in svcs:
+            if svc in self.serviceGroupByName:
+                resolved.update(self._expandServiceGroup(svc))
+            else:
+                resolved.add(svc)
+        return list(resolved)
+
+    # ---- recursive helpers with caching --------------------------
+
+    def _expandAppGroup(self, name: str) -> List[str]:
+        if name in self._expandedAppGroupCache:
+            return self._expandedAppGroupCache[name]
+
+        grp = self.appGroupByName.get(name)
+        if not grp:
+            return [name]
+
+        leaves: List[str] = []
+        for member in getattr(grp, "value", []):
+            if member in self.appGroupByName:
+                leaves.extend(self._expandAppGroup(member))
+            #TODO: Containers, especially predefined ones are not currently being handled correctly
+            #!Must figure out how to correctly handle and resolve containers to their leaf applications
+            elif member in self.appContainerByName:
+                leaves.extend(self._expandAppContainer(member))
+            elif member in self.predefContainerByName:
+                leaves.extend(self._expandPredefContainer(member))
+            else:
+                leaves.append(member)
+        deduped = list(dict.fromkeys(leaves))
+        self._expandedAppGroupCache[name] = deduped
+        return deduped
+
+    def _expandAppContainer(self, name: str) -> List[str]:
+        #TODO: Containers, especially predefined ones are not currently being handled correctly
+        #!Must figure out how to correctly handle and resolve containers to their leaf applications
+        cont = self.appContainerByName.get(name)
+        if not cont:
+            return [name]
+        leaves: List[str] = []
+        for member in getattr(cont, "value", []):
+            if member in self.appGroupByName:
+                leaves.extend(self._expandAppGroup(member))
+            elif member in self.appContainerByName:
+                leaves.extend(self._expandAppContainer(member))
+            elif member in self.predefContainerByName:
+                leaves.extend(self._expandPredefContainer(member))
+            else:
+                leaves.append(member)
+        return leaves
+
+    def _expandPredefContainer(self, name: str) -> List[str]:
+        #TODO: Containers, especially predefined ones are not currently being handled correctly
+        #!Must figure out how to correctly handle and resolve containers to their leaf applications
+        cont = self.predefContainerByName.get(name)
+        if not cont:
+            return [name]
+        return getattr(cont, "value", []) or []
+
+    @lru_cache(maxsize=None)
+    def _expandServiceGroup(self, name: str) -> Tuple[str, ...]:
+        grp = self.serviceGroupByName.get(name)
+        if not grp:
+            return (name,)
+        leaves: Set[str] = set()
+        for member in getattr(grp, "value", []):
+            if member in self.serviceGroupByName:
+                leaves.update(self._expandServiceGroup(member))
+            else:
+                leaves.add(member)
+        return tuple(leaves)
+
+
+    # ------------------------------------------------------------------
+    #  Port resolution helper (used by ruleDocumentBuilder)
+    # ------------------------------------------------------------------
+
+    def enrichRuleWithPorts(
+        self,
+        apps: List[str],
+        services: List[str],
+        serviceFieldRaw: List[str],
+    ) -> Dict[str, List | Dict]:
+        """
+        Resolve all <protocol>/<port> pairs a rule allows and return
+        {"resolvedPorts": [...], "portReasoning": {...}}.
+
+        * `apps` / `services` must be fully expanded (no groups).
+        * Keeps application-default semantics intact.
+        """
+        resolved_ports: Set[str] = set()
+        reasoning: Dict[str, List[str]] = {}
+
+        # --- application-default -------------------------------------
+        if serviceFieldRaw == ["application-default"]:
+            for app in apps:
+                port_map = self.applicationToPorts.get(app, {})
+                for proto, port_list in port_map.items():
+                    for port in port_list:
+                        key = f"{proto}/{port}"
+                        resolved_ports.add(key)
+                        reasoning.setdefault(key, []).append(
+                            f"{app} (application-default)"
+                        )
+
+        # --- explicit service objects --------------------------------
+        for svc in services:
+            if svc == "application-default":
+                continue
+            port_map = self.serviceToPorts.get(svc, {})
+            for proto, port_list in port_map.items():
+                for port in port_list:
+                    key = f"{proto}/{port}"
+                    resolved_ports.add(key)
+                    reasoning.setdefault(key, []).append(
+                        f"{svc} (service object)"
+                    )
+
+        return {
+            "resolvedPorts": sorted(resolved_ports),
+            "portReasoning": reasoning,
+        }

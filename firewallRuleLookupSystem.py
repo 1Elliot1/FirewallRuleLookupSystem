@@ -43,14 +43,18 @@ class PanoramaData:
         self.predefinedObjectContainers = self.predefined.application_container_objects
         #holds two objects, there are only 2 services with location set to predefined in panorama UI
         self.predefinedServiceObjects = self.predefined.service_objects
-        #self.predefinedServiceGroups = self.predefined.service_groups
+        self.predefinedServiceGroups = self.predefined.service_groups
+
+        testCont = self.predefined.application_container_objects.get("cisco-spark")
+        print("Container Print Out: ", testCont)
+        print("Applications Print Out From Container ", str(testCont.applications))
 
         self.deviceGroupRules = {}
         self.vlanData = {}
 
         self.collectDeviceGroupRules()
         self.collectVlanData()
-
+        
         self.buildApplicationServicePortMap()
         self.correlationMatrix = self.buildCorrelationMatrix()
         self.ruleMatrix = self.buildRuleMatrix()
@@ -183,7 +187,7 @@ or equivalent to it.
             if self.ipInCidr(cleanIp, str(vlanCidr)):
                 return vlanNum
         return None
-    
+
     @staticmethod
     def correlateVlanToZone(vlanNum, zones):
         """
@@ -306,100 +310,7 @@ or equivalent to it.
         correlationResult["addressGroup"] = self.correlateAddressToAddressGroup(matchedObject)
 
         return correlationResult
-
-    # --- Correlating Objects Logic Ends Here ---
-    # --- !!! Rule Lookup Methods Start Here !!! ---
-
-    def correlateInput(self, inputValue):
-        """
-        Determine the type of input and perform correlation.
-        Currently, assumes inputValue is an IP address.
-        TODO: This is where you will parse the users query and figure out what to search by (IP, name, range, group, vlan, zone, etc. )
-        """
-        #use regex to parse which input is most likely?
-        try:
-            correlationResult = self.correlateIP(inputValue)
-        except ValueError:
-            logging.error("Input value is not a valid IP address: %s", inputValue)
-            return None
-        return correlationResult
-
-    def correlateApplications(self, correlationResult):
-        """
-        Correlate applications to the input.
-        TODO: Implement application correlation logic (e.g., based on UDP/TCP ports).
-        """
-        correlationResult["applications"] = [] 
-        return correlationResult
-
-    def correlateServices(self, correlationResult):
-        """
-        Correlate services to the input.
-        TODO: Implement service correlation logic (e.g., based on UDP/TCP ports).
-        """
-        correlationResult["services"] = []  # Placeholder for matched services.
-        return correlationResult
-
-    def ruleImpactsCorrelation(self, rule, correlationResult):
-        """
-        Check if a given rule impacts the input based on the correlation result.
-        This example checks if the address object or address group appears in the rule's source or destination.
-        Extend with VLAN, zone, application, or service checks as needed.
-        """
-
-        #Feels like a very clunky method... any improvements?
-        if correlationResult["addressObject"]:
-            for addr in correlationResult["addressObject"]:
-                if addr in getattr(rule, "source", []):
-                    return True
-                if addr in getattr(rule, "destination", []):
-                    return True
-        if correlationResult["vlan"]:
-            if correlationResult["vlan"] in getattr(rule, "source", []):
-                return True
-            if correlationResult["vlan"] in getattr(rule, "destination", []):
-                return True
-        if correlationResult["zone"]:
-            if correlationResult["zone"] in getattr(rule, "fromzone", []):
-                return True
-            if correlationResult["zone"] in getattr(rule, "tozone", []):
-                return True
-        if correlationResult["addressGroup"]:
-            #can be apart of multiple groups, so check if any of the address groups match
-            for addressGroup in correlationResult["addressGroup"]:
-                if addressGroup in getattr(rule, "source", []):
-                    return True
-                if addressGroup in getattr(rule, "destination", []):
-                    return True
-        # TODO: Add additional checks for applications, and services.
-        return False
-
-    def findMatchingRules(self, correlationResult):
-        """
-        Iterate through device group rules and return a list of rules
-        that match the correlation result.
-        """
-        matchingRules = []
-        for dgName, ruleTypes in self.deviceGroupRules.items():
-            for ruleTypeName, rules in ruleTypes.items():
-                for rule in rules:
-                    #iterates through all rules, checks if they impact the query or any object the 
-                    #query is associated with
-                    if self.ruleImpactsCorrelation(rule, correlationResult):
-                        matchingRules.append({
-                            "deviceGroup": dgName,
-                            "ruleType": ruleTypeName,
-                            "ruleName": rule.name,
-                            "source": getattr(rule, "source", []),
-                            "destination": getattr(rule, "destination", []),
-                            "action": getattr(rule, "action", None),
-                            "service": getattr(rule, "service", []),
-                            "application": getattr(rule, "application", []),
-                            "fromzone": getattr(rule, "fromzone", []),
-                            "tozone": getattr(rule, "tozone", [])
-                        })
-        return matchingRules
-
+    
     def correlateAddressObjects(self, ip):
         """
         Return all address objects that contain the inut IP
@@ -416,6 +327,8 @@ or equivalent to it.
         
         return matchingObjects
 
+    # --- Correlating Objects Logic Ends Here ---
+
     def enrichRuleWithPorts(self, apps, services, serviceFieldRaw):
         """
         Resolve all ports a rule allows and annotate with reasoning
@@ -428,6 +341,9 @@ or equivalent to it.
         #handle applicationDefault logic:
         if serviceFieldRaw and len(serviceFieldRaw) == 1 and serviceFieldRaw[0] == "application-default":
             for app in apps:
+                #because nested groups are not resolved, they search the applicationToPorts mapping for the parent
+                #name-- finding nothing (Since groups are stored as their members)
+                #So, need to resolve the group to its members first before this point.
                 portMap = self.applicationToPorts.get(app, {})
                 if not portMap:
                     print(f"Warning: No port mapping found for application '{app}'")
@@ -454,182 +370,6 @@ or equivalent to it.
             "portReasoning": portReasoning
         }
 
-    # --- Lookup Methods Start Here | Likely to Remove ---
-
-    def fullCorrelationLookup(self, inputValue):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        #All correlation should now occur in the exported files. 
-        """
-        High-level method:
-         1. Correlate the input to known objects.
-         2. (Optionally) correlate applications and services.
-         3. Find and return all matching rules.
-        """
-        correlationResult = self.correlateInput(inputValue)
-        if not correlationResult:
-            return None
-        # correlationResult = self.correlateApplications(correlationResult)
-        # correlationResult = self.correlateServices(correlationResult)
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesBySubnet(self, subnet):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        """
-        Lookup rules that apply to the given subnet.
-        TODO: Implement logic to match rules based on subnet overlap.
-        """
-        correlationResult = {
-            "ip": subnet,
-            "addressObject": None,
-            "vlan": None,
-            "zone": None,
-            "addressGroup": None,
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-        # Extend this by checking if the subnet overlaps with any address object.
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesByApplication(self, applicationName):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        """
-        Lookup rules that reference the given application.
-        TODO: Implement logic to match rules by application.
-        """
-        correlationResult = {
-            "ip": None,
-            "addressObject": None,
-            "vlan": None,
-            "zone": None,
-            "addressGroup": None,
-            "applications": [applicationName],
-            "services": None,
-            "matchingRules": []
-        }
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesByZone(self, zone):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        """
-        Lookup rules that apply to the given zone.
-        """
-        #Since zones do not have a parent "bucket" aside from maybe a template, could I just return the 
-        #rules that impact that zone?
-        #Tested 04.01.2025. Seems to return nearly all rules applied to a zone. Counted a difference of 10 
-        #when manually checking. Have a feeling it has to do with predefined rules? Try to validate 
-        #where the descrepancy is coming from.
-        correlationResult = {
-            "ip": None,
-            "addressObject": None,
-            "vlan": None,
-            "zone": zone,
-            "addressGroup": None,
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesByAddressGroup(self, addressGroupName):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-
-        """
-        Lookup rules that apply to the given address group.
-        """
-        resolvedGroups = {addressGroupName}
-        parentGroups = self.resolveNestedAddressGroups(addressGroupName)
-        resolvedGroups.update(parentGroups)
-
-        correlationResult = {
-            "ip": None,
-            "addressObject": None,
-            "vlan": None,
-            "zone": None,
-            "addressGroup": list(resolvedGroups),
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesByVlan(self, vlanNum):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        """
-        Lookup rules that apply to the given VLAN number
-        Method uses the vlanData mapping to correlate VLAN to its CIDR range and associated zones,
-        then builds a correlation result for the rule matching. 
-        """
-        correlationResult = {
-            "ip": None,
-            "addressObject": None,
-            "vlan": vlanNum,
-            "zone": None,
-            "addressGroup": None,
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-
-        for key, data in self.vlanData.items():
-            vlanMap = data.get("vlanMap", {})
-            zones = data.get("zones", [])
-            if vlanNum in vlanMap:
-                correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
-                #break to avoid unnecessary iterations once a match is found
-                break
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-    def lookupRulesByCIDR(self, CIDR):
-        #TODO: (First double check if the case:) Remove-- Un-needed, searches happen once data is exported, eventually
-        """
-        Lookup rules that apply to the given CIDR range.
-        This method checks if provided CIDR overlaps with any of the VLAN CIDR ranges or address objects
-        then builds a correlation result accordingly
-        """
-        network = ipaddress.ip_network(CIDR, strict=False)
-        correlationResult = {
-            "ip": CIDR,
-            "addressObject": [],
-            "vlan": None,
-            "zone": None,
-            "addressGroup": None,
-            "applications": None,
-            "services": None,
-            "matchingRules": []
-        }
-        #Alter to return rules for any address object that overlaps with the CIDR range
-        for key, data in self.vlanData.items():
-            vlanMap = data.get("vlanMap", {})
-            zones = data.get("zones", [])
-            for vlanNum, vlanCIDR in vlanMap.items():
-                vlanNetwork = ipaddress.ip_network(str(vlanCIDR), strict=False)
-                if network.overlaps(vlanNetwork):
-                    correlationResult["vlan"] = vlanNum
-                    correlationResult["zone"] = self.correlateVlanToZone(vlanNum, zones)
-                    break
-            if correlationResult["vlan"]:
-                break
-        
-        #Check individual address objects for overlap with the CIDR range
-        for addr in self.addressObjects:
-            try:
-                addrIP = ipaddress.ip_network(addr.value.split('/')[0])
-                if addrIP in network:
-                    correlationResult["addressObject"].append(addr.name)
-            except ValueError:
-                logging.error(f"Invalid address object value: {addr.value}")
-        correlationResult["matchingRules"] = self.findMatchingRules(correlationResult)
-        return correlationResult
-
-# --- Lookup Methods End Here | Likely to Remove ---    
-
     def resolveNestedAddressGroups(self, addressGroupName, seen = None):
         """
         Recursively resolve nested address groups.
@@ -646,66 +386,155 @@ or equivalent to it.
                     parentGroups.update(self.resolveNestedAddressGroups(group.name, seen))
         return list(parentGroups)
     
-    def resolveApplicationGroup(self, groupName):
+    def resolveApplicationGroup(self, groupName: str, seen: set[str] | None = None) -> list[str]:
         """
-        Returns the list of application names in an application group
+        Recursively returns all leaf application names contained in an
+        Application Group (handles groups inside groups and containers).
+        Cycles are detected by the `seen` set.
         """
-        #TODO: Double check your logic on this, do you only want to return the names of apps in the groups, or correlate all of the info within each element of the group to the parent group?
-        for group in self.applicationGroup:
-            if group.name == groupName:
-                return group.value if hasattr(group, "value") else []
-        return []
+        if seen is None:
+            seen = set()
+        if groupName in seen:
+            logging.warning("Cycle detected while expanding application group %s", groupName)
+            return []
+
+        # memoisation pays off when thousands of rules reference the same group
+        cached = self.expandedAppGroupCache.get(groupName)
+        if cached is not None:
+            return cached
+
+        grp = self.appGroupByName.get(groupName)
+        if not grp:
+            # Not a group – treat it as a leaf application name
+            return [groupName]
+
+        seen.add(groupName)
+        leaves: list[str] = []
+
+        for member in getattr(grp, "value", []):
+            # 1.  Another Application Group?
+            if member in self.appGroupByName:
+                leaves.extend(self.resolveApplicationGroup(member, seen))
+            # 2.  Application Container defined by the admin?
+            elif member in self.appContainerByName:
+                leaves.extend(self.resolveApplicationContainer(member, seen))
+            # 3.  Pre-defined container (from Palo Alto content DB)?
+            elif member in self.predefContainerByName:
+                leaves.extend(self.resolvePredefinedContainer(member))
+            else:
+                # 4.  Plain application leaf
+                leaves.append(member)
+
+        # Cache the fully-expanded list (duplicates removed, order preserved)
+        deduped = list(dict.fromkeys(leaves))
+        self.expandedAppGroupCache[groupName] = deduped
+        return deduped
     
-    def resolveServiceGroup(self, groupName):
+    def resolveServiceGroup(self, groupName, seen=None):
         """
-        Returns the list of service names in a service group
+        Recursively resolves service groups to get all service names.
         """
-        #TODO: Double check your logic on this, do you only want to return the names of services in the groups, or correlate all of the info within each element of the group to the parent group?
+        if seen is None:
+            seen = set()
+        if groupName in seen:
+            return []
+        seen.add(groupName)
+
         for group in self.serviceGroups:
             if group.name == groupName:
-                return group.value if hasattr(group, "value") else []
+                values = getattr(group, "value", [])
+                result = []
+                for val in values:
+                    if val in [g.name for g in self.serviceGroups]:
+                        result.extend(self.resolveServiceGroup(val, seen))
+                    else:
+                        result.append(val)
+                return result
         return []
+
+    def resolveApplicationContainer(self, containerName: str,
+                                    seen: set[str] | None = None) -> list[str]:
+        container = self.appContainerByName.get(containerName)
+        if not container:
+            return []
+
+        # handle nested containers or groups
+        leaves: list[str] = []
+        for val in getattr(container, "value", []):
+            if val in self.appGroupByName:
+                leaves.extend(self.resolveApplicationGroup(val, seen))
+            elif val in self.appContainerByName:
+                leaves.extend(self.resolveApplicationContainer(val, seen))
+            elif val in self.predefContainerByName:
+                leaves.extend(self.resolvePredefinedContainer(val))
+            else:
+                leaves.append(val)
+        return leaves
     
-    def resolveApplicationContainer(self, containerName):
-        for container in self.applicationContainers.get(containerName):
-            if container and hasattr(container, "value"):
-                return container.value or []
-        return []
+    def resolvePredefinedContainer(self, name: str) -> list[str]:
+        container = self.predefinedObjectContainers.get(name)
+        if container:
+            first = getattr(container, "value", None)
+            if first:
+                return first 
+
+            second = self.containerMembersViaParams(container)
+            if second:
+                return second
+
+        return self._container_members.get(name, [])
     
-    def resolvePredefinedContainer(self, containerName):
-        container = self.predefinedObjectContainers.get(containerName)
-        if container and hasattr(container, "value"):
-            return container.value or []
-        return []
-    
-    def resolveAppAndServiceGroups(self, apps, services):
+    def resolveAppAndServiceGroups(
+        self,
+        apps: list[str] | None,
+        services: list[str] | None,
+    ) -> tuple[list[str], list[str]]:
         """
-        Given raw app/service lists, resolve all groups into flat lists of its members
-        Returns: allApps, allServices
+        Flatten *all* application and service references.
+
+        • If an item is an Application Group → expand recursively.
+        • If it is an Application Container (admin-defined or predefined) →
+        expand to its leaves.
+        • Otherwise treat it as an application leaf.
+        ('application-default' is kept unchanged because it is not a real
+        application name.)
+
+        Returns  (allApps, allServices)  as **deduplicated lists**.
         """
 
-        resolvedApps = set()
-        resolvedServices = set()
+        resolvedApps: set[str] = set()
+        resolvedSvcs: set[str] = set()
 
+        # ── Applications ────────────────────────────────────────────────────
         for app in apps or []:
-            #if current app is a group, resovlve it to its memebers and add to all apps
-            if app in [group.name for group in self.applicationGroup]:
+            if app == "application-default":
+                # keep sentinel so the caller can detect it later
+                resolvedApps.add(app)
+                continue
+            
+            if app in self.leafAppNames:
+                resolvedApps.add(app)
+            elif app in self.appGroupByName:
                 resolvedApps.update(self.resolveApplicationGroup(app))
-            elif app in self.applicationContainers:
+            elif app in self.appContainerByName:
                 resolvedApps.update(self.resolveApplicationContainer(app))
-            elif app in self.predefinedObjectContainers:
-                resolvedApps.update(self.resolvePredefinedContainer(app))
+            elif app in self.predefContainerByName:
+                resolvedApps.update(self.resolveApplicationContainer(app))
             else:
                 resolvedApps.add(app)
 
-        for service in services or []:
-            #if current service is a group, resovlve it to its memebers and add to all services
-            if service in [group.name for group in self.serviceGroups]:
-                resolvedServices.update(self.resolveServiceGroup(service))
+        # ── Services ────────────────────────────────────────────────────────
+        for svc in services or []:
+            if svc in self.serviceGroupByName:
+                resolvedSvcs.update(self.resolveServiceGroup(svc))
             else:
-                resolvedServices.add(service)
+                resolvedSvcs.add(svc)
 
-        return list(resolvedApps), list(resolvedServices)
+        # Return deterministic order (helps diff / tests)
+        return (
+            list(dict.fromkeys(resolvedApps)),     # preserves first-seen order
+            list(dict.fromkeys(resolvedSvcs)),
+        )
     
     def buildApplicationServicePortMap(self):
         """
@@ -758,8 +587,6 @@ or equivalent to it.
                 portToEntities[f"{protocol}/{destPort}"]["services"].append(serviceName)
         
         self.portToEntities = dict(portToEntities)
-
-
 
     def buildCorrelationMatrix(self):
         """
@@ -886,7 +713,7 @@ or equivalent to it.
             "ports": self.portToEntities
         }
 
-        with open("appServiceMapping.json", "w") as outfile:
+        with open("appServiceMapping0.json", "w") as outfile:
             json.dump(mapping, outfile, indent=4)
         logging.info("Exported application/service mapping to appServiceMapping.json")
             
@@ -897,50 +724,14 @@ or equivalent to it.
     
     def exportAllRulesToFile(self):
         jsonObj = json.dumps(self.ruleMatrix, indent=4)
-        with open("deviceGroupRules.json", "w") as outfile:
+        with open("deviceGroupRules0.json", "w") as outfile:
             outfile.write(jsonObj)
 
     
-    def exportCorrelationMatrixToFile(self, filename="correlationMatrix.json"):
+    def exportCorrelationMatrixToFile(self, filename="correlationMatrix0.json"):
         jsonObj = json.dumps(self.correlationMatrix, indent=4)
         with open(filename, "w") as outfile:
             outfile.write(jsonObj)
-
-    # --- Lookup Methods Based on Different Input Types End Here ---
-
-def testMethods(panData):
-    """
-    Test function to verify limited API calls and functionality.
-    Example: Correlate a known IP and lookup matching rules.
-    """
-    testIP = ""
-    result = panData.fullCorrelationLookup(testIP)
-    if result:
-        logging.info("Test correlation result for IP %s: %s", testIP, result)
-    else:
-        logging.error("No correlation result found for IP: %s", testIP)   
-
-def testZoneLookup(panData):
-    """
-    Test function to verify zone lookup functionality.
-    Example: Lookup rules based on a known zone.
-    """
-    testZone = "" 
-    result = panData.lookupRulesByVlan(testZone)
-    if result:
-        logging.info("Test correlation result for VLAN %s: %s", testZone, result)
-        print(f"Rules Found: {len(result['matchingRules'])}")
-    else:
-        logging.error("No correlation result found for zone: %s", testZone)
-
-def testApplicationPortMapping(panData):
-    panData.buildApplicationPortMap()
-
-    print("Ports for 'web-browsing':")
-    print(panData.applicationToPorts.get('web-browsing', "Not Found"))
-
-    print("Applications for port 'tcp/443':")
-    print(panData.portToApplications.get('tcp/443', "Not Found"))
 
 def main():
     #Address Objects are missing 11 total objects, because they are held in a different location
@@ -963,10 +754,10 @@ def main():
 
     #build PanoramaData object
     panData = PanoramaData(pano)
-    panData.buildApplicationServicePortMap()
     panData.exportAllRulesToFile()
     panData.exportAllAppServiceObjectsToFile()
     panData.exportCorrelationMatrixToFile()
+
 
 if __name__ == "__main__":
     main()
