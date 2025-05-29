@@ -147,12 +147,20 @@ def _expandAddressReferences(
             groups.add("any")
             continue
 
+        # ── AddressObject referenced by name ───────────────────────
         addressObject = panData.addressObjectByName.get(reference)
         if addressObject:
             #Direct addr object reference (Single IPs are also added to cidr collection):
             objects.add(addressObject.name)
             cidrs.add(addressObject.value)
-        
+
+            #If objects val is a network-- theres potentially child object groups that fall within it. 
+            #Find all nested addressObjects fully contained within the object:
+            if "/" in addressObject.value: 
+                objects.update(
+                    name for name in panData.nestedObjectsInNetwork(addressObject.value)
+                    if name != addressObject.name  # Avoid adding itself    
+                )
             #Additionaly, pull the objects parent groups, so that search by groups work 
             #TODO: Confirm that this logic is correct. If a rule contains a reference to an object-- should the rule also include the parent groups?
             parent = panData.addressGroupsForObject(addressObject)
@@ -160,21 +168,24 @@ def _expandAddressReferences(
                 groups.update(parent)
             continue
 
+        # ── AddressGroup referenced by name ────────────────────────
         addressGroup = panData.addressGroupByName.get(reference)
         if addressGroup:
-            groups.add(addressGroup.name)
+            #add the curr group and every nested child group name
+            groups.update(panData.allNestedGroupNames(addressGroup.name))
+
             #Flatten the group's members into objects/cidrs
-            for member in getattr(addressGroup, "static_value", []):
-                memberObject = panData.addressObjectByName.get(member)
-                if memberObject:
-                    objects.add(memberObject.name)
-                    cidrs.add(memberObject.value)
+            #Add every individual leaf AddressObject under the group heirarchy (including nested groups)
+            for objectName in  panData.expandAddressGroups(addressGroup.name):
+                object = panData.addressObjectByName.get(objectName)
+                if object: 
+                    objects.add(object.name)
+                    cidrs.add(object.value)
             continue 
 
-        #If the reference is not a object or group, keep it as a group token.
-        #This way, users can still filter on whatever literal value 
-
+        # ── Fallback: literal token kept as a group
         groups.add(reference)
+
     return list(objects), list(groups), list(cidrs)
 
 

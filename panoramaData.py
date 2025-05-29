@@ -199,6 +199,59 @@ class PanoramaData:
         # Cache to avoid re‑expanding the same app group 1000× --------
         self._expandedAppGroupCache: Dict[str, List[str]] = {}
 
+        #Set up a list of tuples containing the networks and their object names to use for adding sub addr objects' names to rules
+        self._nets: list[tuple[ipaddress.IPv4Network, str]] = [] #list of tuples: (network, objectName)
+        for object in self.addressObjects:
+            try:
+                net = ipaddress.ip_network(object.value, strict=False)
+            except ValueError:
+                continue
+            self._nets.append((net, object.name))
+
+    @lru_cache(maxsize=None)
+    def nestedObjectsInNetwork(self, parentCidr: str) -> tuple[str, ...]:
+        """
+        Return names of all AddressObjects whos CIDR/host network is fully contained in parentCidr (excluding identical object)
+        """
+        try:
+            parent = ipaddress.ip_network(parentCidr, strict=False)
+        except ValueError:
+            return ()
+        
+        out: list[str] = [
+            name
+            for net, name in self._nets
+            if net.version == parent.version
+            and net != parent
+            and net.subnet_of(parent)
+        ]
+        return tuple(out)   
+    
+    def allNestedGroupNames(self, groupName: str) -> List[str]:
+        """
+        Return {groupName} and all nested child group names recursively
+        """
+        out: set[str] = set()
+        stack = [groupName]
+        while stack:
+            #grab a group from stack
+            g  = stack.pop()
+            #if groups already been seen, skip
+            if g in out:
+                continue
+            #add group to seenlist
+            out.add(g)
+            #get the group object from the map by its name
+            grp = self.addressGroupByName.get(g)
+            if not grp:
+                continue
+            #get all members of group
+            for member in getattr(grp, "static_value", []):
+                #if a member is a group, add to stack to expand it as well
+                if member in self.addressGroupByName:
+                    stack.append(member)
+        return list(out)
+        
     # ------------------------------------------------------------------
     #  Rule handling
     #  (collect rules from all device groups/templates)
@@ -313,7 +366,7 @@ class PanoramaData:
 
     def expandAddressGroups(self, groupName: str) -> List[str]:
         """
-        Return all nested members (recursively) of an Address Group
+        Return all nested members (recursively) of an Address Group (Leaf objects only)
         """
         #TODO: Determine if this still maintains the groups that are impacted by a rule, or strictly all of the leaf objects they resolve to
         #!If it only resolves to leave objects, figure out if that is the desired behavior
