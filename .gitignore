@@ -5,4 +5,4 @@ text
 *.ndjson
 __pycache__
 *.pyc
-out
+out/
