@@ -28,8 +28,8 @@ from typing import Dict, List, Set, Tuple
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
     PreRulebase,
-    PostRulebase,
-    Rulebase,
+    #PostRulebase,
+    #Rulebase,
     SecurityRule,
     NatRule,
     ApplicationOverride,
@@ -40,7 +40,7 @@ from panos.policies import (
 from panos.network import (
     AggregateInterface,
     Layer3Subinterface,
-    Vlan,
+    #Vlan,
     Zone,
 )
 from panos.device import Vsys
@@ -71,25 +71,27 @@ RULE_TYPES = (
     AuthenticationRule,
 )
 
-RULEBASE_CLASSES = (PreRulebase, Rulebase, PostRulebase)
+#RULEBASE_CLASSES = (PreRulebase, Rulebase, PostRulebase)
 
 #lru_cache to speed up repeated lookups
 #TODO: Look into the lru_cache decorator to see how it works/what it exactly does
 @lru_cache(maxsize=None)
 def _ip_in_cidr(ip: str, cidr: str) -> bool:
+    """Fast *utility* used by higher‑level correlation helpers."""
     try:
         network = ipaddress.ip_network(cidr.strip("'[]"), strict=False)
-        if network.prefixlen == 0:  # Skip 0.0.0.0/0 catch‑alls
-            return False
     except ValueError:
         return False
 
+    if network.prefixlen == 0:  # 0.0.0.0/0 catch‑all. Ignore
+        return False
+
     try:
-        #TODO: Ensure that this does not crash when comparing an IPV4 to IPV6
-        #TODO: Ensure that this does not crash and/or behaves as expected (True) when the input IP is equivalent to the CIDR
-        if "/" in ip:  # ip might actually be a CIDR
+        if "/" in ip:
             subject = ipaddress.ip_network(ip, strict=False)
-            return subject.subnet_of(network) and subject.prefixlen >= network.prefixlen
+            return (
+                subject.version == network.version and subject.subnet_of(network)
+            )
         return ipaddress.ip_address(ip) in network
     except ValueError:
         return False
@@ -123,35 +125,32 @@ class PanoramaData:
     predefContainerByName: Dict[str, ApplicationContainer]
     leafAppNames: Set[str]
 
-    # Misc ---------------------------------------------------------
+    # Big caches --------------------------------------------------
     deviceGroupRules: Dict[str, Dict[str, List]]
     vlanData: Dict[str, Dict]
     applicationToPorts: Dict[str, Dict[str, List[str]]]
     serviceToPorts: Dict[str, Dict[str, List[str]]]
     portToEntities: Dict[str, Dict[str, List[str]]]
 
+    #predefined application containers -> Member leaves
+    _predefinedContainerLeaves: Dict[str, List[str]] = {}  
+
     def __init__(self, pano: Panorama) -> None:
         self.pano = pano
         self._refreshPanoramaInventory()
         self._buildFastMaps()
 
-        self.deviceGroupRules: Dict[str, Dict[str, List]] = {}
-        self.vlanData: Dict[str, Dict] = {}
+        self._refreshPredefContainerLeaves()
+
+        self.deviceGroupRules = {}
+        self.vlanData = {}
 
         self._collectDeviceGroupRules()
         self._collectVlanData()
         self._buildApplicationServicePortMaps()
 
     # ------------------------------------------------------------------
-    #  Public convenience methods (thin wrappers around maps)
-    # ------------------------------------------------------------------
-
-    def addressGroupsForObject(self, obj: AddressObject) -> List[str] | None:
-        """Return *all* groups (incl. nested parents) that contain *obj*."""
-        return self._addrToGroup.get(obj.name)
-
-    # ------------------------------------------------------------------
-    #  Inventory collection helpers
+    #  Inventory Private Methods
     # ------------------------------------------------------------------
 
     def _refreshPanoramaInventory(self) -> None:
@@ -172,6 +171,7 @@ class PanoramaData:
         predef = Predefined(self.pano)
         predef.refreshall_applications()
         predef.refreshall_services()
+
         self._predefAppObjects       = predef.application_objects
         self.predefContainerByName  = predef.application_container_objects
         self._predefServiceObjects   = predef.service_objects
@@ -192,21 +192,39 @@ class PanoramaData:
         for grp in self.addressGroups:
             for member in getattr(grp, "static_value", []):
                 addr2grp[member].add(grp.name)
-        self._addrToGroup: Dict[str, List[str]] = {
-            k: sorted(v) for k, v in addr2grp.items()
-        }
-
-        # Cache to avoid re‑expanding the same app group 1000× --------
-        self._expandedAppGroupCache: Dict[str, List[str]] = {}
+        self._addrToGroup = {k: sorted(v) for k, v in addr2grp.items()}
 
         #Set up a list of tuples containing the networks and their object names to use for adding sub addr objects' names to rules
         self._nets: list[tuple[ipaddress.IPv4Network, str]] = [] #list of tuples: (network, objectName)
         for object in self.addressObjects:
             try:
                 net = ipaddress.ip_network(object.value, strict=False)
+                self._nets.append((net, object.name))
             except ValueError:
                 continue
-            self._nets.append((net, object.name))
+        
+        # Cache to avoid re‑expanding the same app group 1000× --------
+        self._expandedAppGroupCache: Dict[str, List[str]] = {}
+
+    # ---------------Predefined Containers ----------------------------
+    def _refreshPredefContainerLeaves(self) -> None:
+        leaves: Dict[str, List[str]] = {}
+        for name in self.predefContainerByName:
+            xpath = ("/config/predefined/application-container"
+                     f"/entry[@name='{name}']")
+            try:
+                xml = self.pano.xapi.get(xpath=xpath)
+                members = [m.text for m in xml.findall(".//functions/member")]
+                leaves[name] = members or []
+            except Exception as exc:
+                _LOG.warning("Predef container '%s' failed: %s", name, exc)
+                leaves[name] = []
+        self._predefinedContainerLeaves = leaves
+    
+    def _expandPredefContainer(self, name: str) -> list[str]:
+        #Check XML API Cache for pre-defined container members
+        #!This returns the name of the members of a container, not the actual application objects
+        return self._predefinedContainerLeaves.get(name, [])
 
     @lru_cache(maxsize=None)
     def nestedObjectsInNetwork(self, parentCidr: str) -> tuple[str, ...]:
@@ -226,51 +244,21 @@ class PanoramaData:
             and net.subnet_of(parent)
         ]
         return tuple(out)   
-    
-    def allNestedGroupNames(self, groupName: str) -> List[str]:
-        """
-        Return {groupName} and all nested child group names recursively
-        """
-        out: set[str] = set()
-        stack = [groupName]
-        while stack:
-            #grab a group from stack
-            g  = stack.pop()
-            #if groups already been seen, skip
-            if g in out:
-                continue
-            #add group to seenlist
-            out.add(g)
-            #get the group object from the map by its name
-            grp = self.addressGroupByName.get(g)
-            if not grp:
-                continue
-            #get all members of group
-            for member in getattr(grp, "static_value", []):
-                #if a member is a group, add to stack to expand it as well
-                if member in self.addressGroupByName:
-                    stack.append(member)
-        return list(out)
-        
-    # ------------------------------------------------------------------
-    #  Rule handling
-    #  (collect rules from all device groups/templates)
-    # ------------------------------------------------------------------
 
+        
+    # -----------Rule Fetching ---------------------------------------
 
     def _collectDeviceGroupRules(self) -> None:
         """Fetch ONLY the pre-rulebase slice, creating the wrapper if absent."""
-        from collections import defaultdict
-
         total = 0
         for dg in self.deviceGroups:
-            # (1) Get or create the <pre-rulebase> node
+            #get or create the pre-rulebase node
             pre_rb = dg.find(PreRulebase)
             if pre_rb is None:
-                pre_rb = PreRulebase()          # ← your original two lines
+                pre_rb = PreRulebase()
                 dg.add(pre_rb)
 
-            # (2) Pull every rule type
+            #pull every rule type
             bucket: Dict[str, List] = defaultdict(list)
             for rt in RULE_TYPES:
                 rules = rt.refreshall(pre_rb)
@@ -278,15 +266,9 @@ class PanoramaData:
                 total += len(rules)
 
             self.deviceGroupRules[dg.name] = bucket
+        _LOG.info("Collected %d pre‑rules across %d device groups", total, len(self.deviceGroupRules))
 
-        _LOG.info(
-            "Collected %d pre-rulebase rules across %d device groups",
-            total, len(self.deviceGroupRules),
-        )
-
-    # ------------------------------------------------------------------
-    #  VLAN and Zone handling
-    # ------------------------------------------------------------------
+    # ----------VLAN and Zone Handling----------------------------------------
 
     def _collectVlanData(self) -> None:
         """
@@ -315,9 +297,8 @@ class PanoramaData:
 
         _LOG.info("Collected VLAN data for %d template/vsys combos", len(self.vlanData))
 
-    # ------------------------------------------------------------------
-    #  Applications and Services to Ports Mapping 
-    # ------------------------------------------------------------------
+
+    # --------- App and Service -> Ports ---------------------------
 
     def _buildApplicationServicePortMaps(self) -> None:
         self.applicationToPorts: Dict[str, Dict[str, List[str]]] = {}
@@ -335,14 +316,14 @@ class PanoramaData:
             for entry in getattr(app, "default_port", []) or []:
                 try:
                     proto, blob = entry.split("/")
-                    proto_lc = proto.lower()
-                    if proto_lc not in {"tcp", "udp", "icmp"}:
+                    proto = proto.lower()
+                    if proto not in {"tcp", "udp", "icmp"}:
                         continue
 
                     for part in blob.split(","):
                         part = part.strip()
-                        ports[proto_lc].append(part)
-                        portToEntities[f"{proto_lc}/{part}"]["applications"].append(app.name)
+                        ports[proto].append(part)
+                        portToEntities[f"{proto}/{part}"]["applications"].append(app.name)
                 except ValueError:
                     _LOG.debug("Cannot parse app port entry: %s", entry)
             self.applicationToPorts[app.name] = ports
@@ -360,9 +341,15 @@ class PanoramaData:
         self.portToEntities = dict(portToEntities)
         _LOG.info("Port maps built: %d apps, %d services", len(self.applicationToPorts), len(self.serviceToPorts))
 
-    # ------------------------------------------------------------------
+
     #  Public helpers reused by ruleDocumentBuiilder (or whatever other script you decide to plug into this)
     # ------------------------------------------------------------------
+
+    def addressGroupsForObject(self, object: AddressObject) -> List[str]:
+        """
+        All direct or ancestor Address Groups containing supplied AddressObject
+        """
+        return self._addrToGroup.get(object.name, [])
 
     def expandAddressGroups(self, groupName: str) -> List[str]:
         """
@@ -390,6 +377,31 @@ class PanoramaData:
                     leaves.add(member)
         
         return list(leaves)
+    
+    def allNestedGroupNames(self, groupName: str) -> List[str]:
+        """
+        Return {groupName} and all nested child group names recursively
+        """
+        out: set[str] = set()
+        stack = [groupName]
+        while stack:
+            #grab a group from stack
+            g  = stack.pop()
+            #if groups already been seen, skip
+            if g in out:
+                continue
+            #add group to seenlist
+            out.add(g)
+            #get the group object from the map by its name
+            grp = self.addressGroupByName.get(g)
+            if not grp:
+                continue
+            #get all members of group
+            for member in getattr(grp, "static_value", []):
+                #if a member is a group, add to stack to expand it as well
+                if member in self.addressGroupByName:
+                    stack.append(member)
+        return list(out)
 
     # ---- Application and Service Expansion -------------------------
 
@@ -411,6 +423,9 @@ class PanoramaData:
     # Private Methods for resolving applications and services..........
 
     def _expandApplications(self, candidates: List[str]) -> List[str]:
+        """
+        Expand application names, groups and containers into a flat list of leaf app names.
+        """
         resolved: List[str] = []
         for app in candidates:
             if app == "application-default":
@@ -419,10 +434,8 @@ class PanoramaData:
                 resolved.append(app)
             elif app in self.appGroupByName:
                 resolved.extend(self._expandAppGroup(app))
-            elif app in self.appContainerByName:
-            #TODO: Containers, especially predefined ones are not currently being handled correctly
-            #!Must figure out how to correctly handle and resolve containers to their leaf applications
-                resolved.extend(self._expandAppContainer(app))
+            # elif app in self.appContainerByName:
+            #     resolved.extend(self._expandAppContainer(app))
             elif app in self.predefContainerByName:
                 resolved.extend(self._expandPredefContainer(app))
             else:
@@ -453,10 +466,8 @@ class PanoramaData:
         for member in getattr(grp, "value", []):
             if member in self.appGroupByName:
                 leaves.extend(self._expandAppGroup(member))
-            #TODO: Containers, especially predefined ones are not currently being handled correctly
-            #!Must figure out how to correctly handle and resolve containers to their leaf applications
-            elif member in self.appContainerByName:
-                leaves.extend(self._expandAppContainer(member))
+            # elif member in self.appContainerByName:
+            #     leaves.extend(self._expandAppContainer(member))
             elif member in self.predefContainerByName:
                 leaves.extend(self._expandPredefContainer(member))
             else:
@@ -465,31 +476,7 @@ class PanoramaData:
         self._expandedAppGroupCache[name] = deduped
         return deduped
 
-    def _expandAppContainer(self, name: str) -> List[str]:
-        #TODO: Containers, especially predefined ones are not currently being handled correctly
-        #!Must figure out how to correctly handle and resolve containers to their leaf applications
-        cont = self.appContainerByName.get(name)
-        if not cont:
-            return [name]
-        leaves: List[str] = []
-        for member in getattr(cont, "value", []):
-            if member in self.appGroupByName:
-                leaves.extend(self._expandAppGroup(member))
-            elif member in self.appContainerByName:
-                leaves.extend(self._expandAppContainer(member))
-            elif member in self.predefContainerByName:
-                leaves.extend(self._expandPredefContainer(member))
-            else:
-                leaves.append(member)
-        return leaves
-
-    def _expandPredefContainer(self, name: str) -> List[str]:
-        #TODO: Containers, especially predefined ones are not currently being handled correctly
-        #!Must figure out how to correctly handle and resolve containers to their leaf applications
-        cont = self.predefContainerByName.get(name)
-        if not cont:
-            return [name]
-        return getattr(cont, "value", []) or []
+#TODO: _ExpandAppContaier function for non-predefined containers?
 
     @lru_cache(maxsize=None)
     def _expandServiceGroup(self, name: str) -> Tuple[str, ...]:
@@ -505,7 +492,6 @@ class PanoramaData:
         return tuple(leaves)
 
 
-    # ------------------------------------------------------------------
     #  Port resolution helper (used by ruleDocumentBuilder)
     # ------------------------------------------------------------------
 
@@ -522,17 +508,17 @@ class PanoramaData:
         * `apps` / `services` must be fully expanded (no groups).
         * Keeps application-default semantics intact.
         """
-        resolved_ports: Set[str] = set()
+        resolvedPorts: Set[str] = set()
         reasoning: Dict[str, List[str]] = {}
 
         # --- application-default -------------------------------------
         if serviceFieldRaw == ["application-default"]:
             for app in apps:
-                port_map = self.applicationToPorts.get(app, {})
-                for proto, port_list in port_map.items():
-                    for port in port_list:
+                portMap = self.applicationToPorts.get(app, {})
+                for proto, portList in portMap.items():
+                    for port in portList:
                         key = f"{proto}/{port}"
-                        resolved_ports.add(key)
+                        resolvedPorts.add(key)
                         reasoning.setdefault(key, []).append(
                             f"{app} (application-default)"
                         )
@@ -541,16 +527,16 @@ class PanoramaData:
         for svc in services:
             if svc == "application-default":
                 continue
-            port_map = self.serviceToPorts.get(svc, {})
-            for proto, port_list in port_map.items():
-                for port in port_list:
+            portMap = self.serviceToPorts.get(svc, {})
+            for proto, portList in portMap.items():
+                for port in portList:
                     key = f"{proto}/{port}"
-                    resolved_ports.add(key)
+                    resolvedPorts.add(key)
                     reasoning.setdefault(key, []).append(
                         f"{svc} (service object)"
                     )
 
         return {
-            "resolvedPorts": sorted(resolved_ports),
+            "resolvedPorts": sorted(resolvedPorts),
             "portReasoning": reasoning,
         }
