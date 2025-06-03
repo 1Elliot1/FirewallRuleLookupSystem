@@ -24,6 +24,8 @@ import logging
 from collections import defaultdict
 from functools import lru_cache
 from typing import Dict, List, Set, Tuple
+import yaml
+from pathlib import Path
 
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
@@ -148,6 +150,8 @@ class PanoramaData:
         self._collectDeviceGroupRules()
         self._collectVlanData()
         self._buildApplicationServicePortMaps()
+
+        self._applyStaticOverrides()
 
     # ------------------------------------------------------------------
     #  Inventory Private Methods
@@ -540,3 +544,71 @@ class PanoramaData:
             "resolvedPorts": sorted(resolvedPorts),
             "portReasoning": reasoning,
         }
+    
+    # ------Static Override YAML Loader----------------------------------
+    def _applyStaticOverrides(self, path: str | Path = "staticOverrides.yml") -> None:
+        """
+        Load static overrides from a YAML file and apply them to the inventory
+        for overriding or adding specific rules or objects not captured by the API
+        """
+        if not Path(path).is_file():
+            _LOG.warning("Static overrides file '%s' not found, skipping", path)
+            return
+        
+        try:
+            data = yaml.safe_load(Path(path).read_text()) or {}
+        except Exception as exc:
+            _LOG.error("Failed to load static overrides from '%s': %s", path, exc)
+            return
+        
+        # ----- Applications to Ports
+        for app, protoMap in data.get("applications", {}).items():
+            self.applicationToPorts.setdefault(app, {})
+            for proto, ports in (protoMap or {}).items():
+                proto = proto.lower()
+                self.applicationToPorts[app].setdefault(proto, [])
+                self.applicationToPorts[app][proto].extend(ports)
+        
+        # ----- Application Groups
+        for group, members in (data.get("applicationGroups") or {}).items():
+            self.appGroupByName.setdefault(group, ApplicationGroup(name=group, value = []))
+            existing = set(getattr(self.appGroupByName[group], "value", []))
+            self.appGroupByName[group].value = list(existing.union(members))
+        
+        # ----- Services to Ports
+        for svc, protoMap in data.get("services", {}).items():
+            self.serviceToPorts.setdefault(svc, {})
+            for proto, ports in (protoMap or {}).items():
+                proto = proto.lower()
+                self.serviceToPorts[svc].setdefault(proto, [])
+                self.serviceToPorts[svc][proto].extend(ports)
+        
+        # ----- Address Objects
+        for name, cidr in (data.get("addressObjects") or {}).items():
+            if name not in self.addressObjectByName:
+                self.addressObjectByName[name] = AddressObject(name=name, value=cidr)
+                try:
+                    net = ipaddress.ip_network(cidr, strict=False)
+                    self._nets.append((net, name))
+                except ValueError:
+                    _LOG.warning("Invalid CIDR '%s' for address object '%s'", cidr, name)
+                    pass
+
+        # ----- Address Groups
+        for group, members in (data.get("addressGroups") or {}).items():
+            ag = self.addressGroupByName.setdefault(group, AddressGroup(name=group, static_value=[]))
+            ag.static_value = list(set(ag.static_value or []).union(members))
+            for m in members:
+                self._addrToGroup.setdefault(m, []).append(group)
+
+        # ----- VLAN / Zone 
+        for key, vlanMap in (data.get("vlans") or {}).items():
+            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
+            self.vlanData[key]["vlanMap"].update(vlanMap)
+
+        for key, zones in (data.get("zones") or {}).items():
+            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
+            self.vlanData[key]["zones"].extend(z for z in zones if z not in self.vlanData[key]["zones"])
+
+        _LOG.info("Static overrides from %s merged", path)
+        

@@ -40,7 +40,7 @@ inv  = PanoramaData(pano)
 
 rule_docs = buildRuleDocuments(inv)
 
-out_file = OUT_DIR / "rule_docs.ndjson"
+out_file = OUT_DIR / "rule_docs1.ndjson"
 with out_file.open("w", encoding="utf-8") as fh:
     for doc in rule_docs:
         json.dump(doc, fh)

@@ -6,3 +6,4 @@ text
 __pycache__
 *.pyc
 out/
+*.yml
