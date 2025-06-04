@@ -18,8 +18,8 @@ import statistics
 from collections import Counter, defaultdict
 
 from panos.panorama import Panorama
-from panoramaData import PanoramaData
-from ruleDocumentBuilder import buildRuleDocuments
+from .panoramaData import PanoramaData
+from .ruleDocumentBuilder import buildRuleDocuments
 
 # ── 0. Config ──────────────────────────────────────────────────────────────
 OUT_DIR     = pathlib.Path("out")

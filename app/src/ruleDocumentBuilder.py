@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import List, Dict, Tuple, Set
 
-from panoramaData import PanoramaData
+from .panoramaData import PanoramaData
 
 PROTOCOL_TO_BYTE = {
         "tcp": 6,
