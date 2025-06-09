@@ -4,4 +4,4 @@ WORKDIR /app
 COPY requirements.txt .       
 RUN pip install --no-cache-dir -r requirements.txt
 COPY uploadToES.py .
-COPY index_template_ruleview.json .
+COPY test_template.json /app/test_template.json

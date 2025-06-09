@@ -19,14 +19,17 @@ from __future__ import annotations
 
 import logging
 from typing import List, Dict, Tuple, Set
-
+from datetime import datetime, timezone
 from .panoramaData import PanoramaData
+import ipaddress, re
 
 PROTOCOL_TO_BYTE = {
         "tcp": 6,
         "udp": 17,
         "icmp": 1,
 }
+
+_RANGE_RE = re.compile(r"\s*([\dA-Fa-f.:]+)\s*-\s*([\dA-Fa-f.:]+)\s*")
 
 # ---------------------------------------------------------------------------
 #  Public API
@@ -112,8 +115,24 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                     },
 
                     "description": getattr(rule, "description", None),
-                    #Add additional rule fields here as needed
+
+                    "snapshotTimestamp": (
+                        datetime.now(timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat()
+                    )
                 }
+
+                src_ip_ranges = [c for c in srcCidrs if c is not None]
+                dst_ip_ranges = [c for c in destCidrs if c is not None]
+
+                doc["srcCidrs"] = src_ip_ranges
+                doc["dstCidrs"] = dst_ip_ranges
+                doc["allCidrs"] = src_ip_ranges + dst_ip_ranges
+
+                doc["ruleWeight"] = panData.calcRuleWeight(doc)
+                doc["isShadowed"] = panData.isShadowed(doc, docs)
+                
                 docs.append(doc)
     
     return docs
@@ -130,6 +149,43 @@ def _normalizeToList(value) -> List[str]:
         return []
     return value if isinstance(value, (list, tuple)) else [value]
 
+def _cidrOrRange(token: str | dict | None) -> str | dict | None:
+    """ 
+    Return a value valid for IP_range or None if not parsable
+    """
+    
+    if isinstance(token, dict):
+        return token 
+    if not token or token.lower() in {"any", "unknown", ""}:
+        return None
+    token = token.strip()
+    #handling dash ranges
+    m = _RANGE_RE.fullmatch(token)
+    if m:
+        start, end = m.group(1), m.group(2)
+        try:
+            ipaddress.ip_address(start)
+            ipaddress.ip_address(end)
+        except ValueError:
+            return None
+        return {"gte": start, "lte": end}
+    
+    if "/" in token:
+        #already valid CIDR
+        try: 
+            return ipaddress.ip_network(token, strict=False).with_prefixlen
+        except ValueError:
+            return None
+        
+    #single host ip without suffix
+    try:
+        ipObj = ipaddress.ip_address(token)
+        mask = 32 if ipObj.version == 4 else 128
+        return f"{ipObj}/{mask}"
+    except ValueError:
+        # fall through → unparsable
+        return None
+
 def _expandAddressReferences(
         panData: "PanoramaData", rawReferences: List[str]
 ) -> Tuple[List[str], List[str], List[str]]:
@@ -140,7 +196,7 @@ def _expandAddressReferences(
 
     objects: Set[str] = set()
     groups: Set[str] = set()
-    cidrs: Set[str] = set()
+    cidrs: List[str | dict] = []
 
     for reference in rawReferences: 
         if reference == "any":
@@ -152,7 +208,9 @@ def _expandAddressReferences(
         if addressObject:
             #Direct addr object reference (Single IPs are also added to cidr collection):
             objects.add(addressObject.name)
-            cidrs.add(addressObject.value)
+            cidrVal = _cidrOrRange(addressObject.value)
+            if cidrVal is not None:
+                cidrs.append(cidrVal)
 
             #If objects val is a network-- theres potentially child object groups that fall within it. 
             #Find all nested addressObjects fully contained within the object:
@@ -180,15 +238,62 @@ def _expandAddressReferences(
                 object = panData.addressObjectByName.get(objectName)
                 if object: 
                     objects.add(object.name)
-                    cidrs.add(object.value)
+                    cidrVal = _cidrOrRange(object.value)
+                    if cidrVal is not None:
+                        cidrs.append(cidrVal)
             continue 
 
         # ── Fallback: literal token kept as a group
         groups.add(reference)
+        seen = set()
+        deduped = []
+        for item in cidrs:
+            key = item if isinstance(item, str) else (item["gte"], item["lte"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        cidrs = deduped
 
     return list(objects), list(groups), list(cidrs)
 
+import re
 
+_RANGE_RE = re.compile(r"\s*([0-9a-fA-F.:]+)\s*-\s*([0-9a-fA-F.:]+)\s*")
+
+def _as_ip_range(token: str) -> str | dict | None:
+    """
+    Convert PAN-OS token → value acceptable for ES ip_range field.
+
+    •  CIDR → canonical CIDR string
+    •  single IP → /32 or /128 CIDR
+    •  dash-range → {"gte": ip1, "lte": ip2}
+    •  anything unparseable → None  (caller should drop it)
+    """
+    if not token or token.lower() in {"any", "unknown"}:
+        return None
+
+    # -- dash-range ------------------------------------------------------
+    m = _RANGE_RE.fullmatch(token)
+    if m:
+        start, end = m.group(1), m.group(2)
+        # validate both ends
+        ipaddress.ip_address(start)
+        ipaddress.ip_address(end)
+        return {"gte": start, "lte": end}
+
+    # -- already CIDR ----------------------------------------------------
+    if "/" in token:
+        return ipaddress.ip_network(token, strict=False).with_prefixlen
+
+    # -- single host IP --------------------------------------------------
+    try:
+        ip_obj = ipaddress.ip_address(token)
+        mask   = 32 if ip_obj.version == 4 else 128
+        return f"{ip_obj}/{mask}"
+    except ValueError:
+        # fall through → unparsable
+        return None
 """
 Be sure to add the helper caches to the PanoramaData class:
     self.addressObjByName   = {o.name: o   for o in self.addressObjects}

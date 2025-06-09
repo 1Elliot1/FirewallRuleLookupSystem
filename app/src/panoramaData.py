@@ -137,6 +137,9 @@ class PanoramaData:
     #predefined application containers -> Member leaves
     _predefinedContainerLeaves: Dict[str, List[str]] = {}  
 
+    #ruleHitCounts: {ruleType: ruleName: hitCount}
+    ruleHitCounts: Dict[str, Dict[str, int]]
+
     def __init__(self, pano: Panorama) -> None:
         self.pano = pano
         self._refreshPanoramaInventory()
@@ -148,6 +151,7 @@ class PanoramaData:
         self.vlanData = {}
 
         self._collectDeviceGroupRules()
+        self._collectHitCounts()
         self._collectVlanData()
         self._buildApplicationServicePortMaps()
 
@@ -546,7 +550,7 @@ class PanoramaData:
         }
     
     # ------Static Override YAML Loader----------------------------------
-    def _applyStaticOverrides(self, path: str | Path = "staticOverrides.yml") -> None:
+    def _applyStaticOverrides(self, path: str | Path = "app/src/staticOverrides.yml") -> None:
         """
         Load static overrides from a YAML file and apply them to the inventory
         for overriding or adding specific rules or objects not captured by the API
@@ -611,4 +615,114 @@ class PanoramaData:
             self.vlanData[key]["zones"].extend(z for z in zones if z not in self.vlanData[key]["zones"])
 
         _LOG.info("Static overrides from %s merged", path)
-        
+
+    # -------------- Additional Metrics for Elasticsearch ----------
+    def calcRuleWeight(self, doc: dict) -> int:
+        weight = (
+            len(doc["source"]["address"]["objects"]) 
+            + len(doc["destination"]["address"]["objects"])
+            + len(doc["services"]) * 5
+            + len(doc["applications"]) * 5
+        )
+        return weight
+
+    def isShadowed(self, candidate: dict, earlier: list[dict]) -> bool:
+        """
+        Check if the canidate rule is shadowed by any of the earlier rules
+        """
+        for sup in earlier:                                     # iterate top-down
+            if sup["action"] != candidate["action"]:
+                continue
+
+            if not self._subset(candidate["source"]["zones"], sup["source"]["zones"]):
+                continue
+            if not self._subset(candidate["destination"]["zones"], sup["destination"]["zones"]):
+                continue
+            if not self._subset(candidate["applications"], sup["applications"]):
+                continue
+            if not self._subset(candidate["services"], sup["services"]):
+                continue
+            if not self._cidrs_cover(                         # src CIDRs
+                    candidate["source"]["address"]["cidr"],
+                    sup["source"]["address"]["cidr"]
+                ):
+                continue
+            if not self._cidrs_cover(                         # dst CIDRs
+                    candidate["destination"]["address"]["cidr"],
+                    sup["destination"]["address"]["cidr"]
+                ):
+                continue
+            return True                                       # first match wins
+        return False
+    
+    @staticmethod
+    def _subset(needle: list[str], haystack: list[str]) -> bool:
+        """`needle` is fully contained in `haystack` (handles `"any"` joker)."""
+        if not needle:               # empty == wildcard
+            return True
+        if "any" in haystack:
+            return True
+        return set(needle).issubset(haystack)
+    
+    @staticmethod
+    def _cidrs_cover(child: list[str | dict], parent: list[str | dict]) -> bool:
+        """
+        Returns True if every element in *child* is fully contained in at least one
+        element in *parent*.  Elements can be:
+            • CIDR string  "10.1.0.0/16"
+            • range dict   {"gte":"10.1.0.5","lte":"10.1.0.20"}
+        """
+        #TODO: Look back at this catch all logic, does it make sense for shadows?
+        if not child:
+            return True
+        if "any" in parent:
+            return True
+
+        # –– normalise parent list into list of ipaddress.IPv[4|6]Network or tuples
+        parent_norm = []
+        for p in parent:
+            if isinstance(p, dict):
+                parent_norm.append((
+                    ipaddress.ip_address(p["gte"]),
+                    ipaddress.ip_address(p["lte"]),
+                ))
+            else:
+                parent_norm.append(ipaddress.ip_network(p, strict=False))
+
+        # –– for every element in child, find a covering parent ––––––––––––––––
+        for c in child:
+            if isinstance(c, dict):
+                c_lo = ipaddress.ip_address(c["gte"])
+                c_hi = ipaddress.ip_address(c["lte"])
+                ok = any(
+                    # parent is range
+                    (isinstance(p, tuple) and p[0] <= c_lo <= c_hi <= p[1]) or
+                    # parent is CIDR
+                    (not isinstance(p, tuple) and
+                    c_lo in p and c_hi in p)
+                    for p in parent_norm
+                )
+            else:
+                c_net = ipaddress.ip_network(c, strict=False)
+                ok = any(
+                    # parent is range
+                    (isinstance(p, tuple) and
+                    p[0] <= c_net.network_address and
+                    c_net.broadcast_address <= p[1]) or
+                    # parent is CIDR
+                    (not isinstance(p, tuple) and c_net.subnet_of(p))
+                    for p in parent_norm
+                )
+            if not ok:
+                return False
+        return True
+
+    
+    def _collectHitCounts(self) -> None:
+        """
+        Collect hit counts for all rules in all device groups.
+        """
+        self.ruleHitCounts = defaultdict(lambda: defaultdict(int))
+        ruleStyles = [
+            ""
+        ]

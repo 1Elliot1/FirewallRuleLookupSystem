@@ -14,7 +14,7 @@ apiKey  = os.getenv("API_KEY")
 if not panAddr or not apiKey:
     raise RuntimeError("PAN_ADDRESS or API_KEY env-var is empty or missing")
 
-OUT_FILE = pathlib.Path("out/rule_docs.ndjson")
+OUT_FILE = pathlib.Path("app/out/rule_docs_test.ndjson")
 OUT_FILE.parent.mkdir(exist_ok=True)
 
 pano = Panorama(panAddr, api_key=apiKey)

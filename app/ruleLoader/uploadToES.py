@@ -20,15 +20,15 @@ from __future__ import annotations
 import argparse, json, os, sys, time, pathlib, requests, tqdm
 
 ES_HOST = os.getenv("ES_HOST" , "http://elasticsearch:9200")
-NDJSON  = pathlib.Path(os.getenv("NDJSON", "/app/out/rule_docs.ndjson"))
-INDEX   = os.getenv("INDEX" ,  "rule_view")
-TPL_PATH = pathlib.Path("/app/index_template_ruleview.json")   # shipped in image
+NDJSON  = pathlib.Path(os.getenv("NDJSON", "/app/out/rule_docs_test.ndjson"))
+INDEX   = os.getenv("INDEX" ,  "test-index")
+TPL_PATH = pathlib.Path("/app/test_template.json")   # shipped in image
 
 # ---------------------------------------------------------------------------
 
 def put_template() -> None:
     tpl = json.load(TPL_PATH.open(encoding="utf-8"))
-    r = requests.put(f"{ES_HOST}/_index_template/ruleview_template", json=tpl)
+    r = requests.put(f"{ES_HOST}/_index_template/test_template", json=tpl)
     r.raise_for_status()
 
 def delete_index() -> None:
@@ -54,7 +54,7 @@ def bulk_load() -> None:
 
     # Count lines just for progress bar (cheap on SSDs; if huge, skip)
     total_docs = sum(1 for _ in NDJSON.open("r", encoding="utf-8"))
-    bar = tqdm.tqdm(total=total_docs, unit="doc", desc="Bulk upload")
+    bar = tqdm.tqdm(total=total_docs, unit="doc", desc=f"Bulk upload of template{TPL_PATH.name} with Index {INDEX} using data from {NDJSON.name}")
 
     def gen():
         for line in iter_bulk_lines(NDJSON, INDEX):
