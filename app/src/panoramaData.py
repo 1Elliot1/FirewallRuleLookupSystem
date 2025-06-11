@@ -31,13 +31,14 @@ from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
     PreRulebase,
     #PostRulebase,
-    #Rulebase,
+    RulebaseHitCount,
     SecurityRule,
     NatRule,
     ApplicationOverride,
     PolicyBasedForwarding,
     DecryptionRule,
     AuthenticationRule,
+
 )
 from panos.network import (
     AggregateInterface,
@@ -137,8 +138,8 @@ class PanoramaData:
     #predefined application containers -> Member leaves
     _predefinedContainerLeaves: Dict[str, List[str]] = {}  
 
-    #ruleHitCounts: {ruleType: ruleName: hitCount}
-    ruleHitCounts: Dict[str, Dict[str, int]]
+    #{ruleID: {hit, lastHit, created, modified}}
+    ruleMetrics: Dict[str, dict]
 
     def __init__(self, pano: Panorama) -> None:
         self.pano = pano
@@ -151,7 +152,7 @@ class PanoramaData:
         self.vlanData = {}
 
         self._collectDeviceGroupRules()
-        self._collectHitCounts()
+        self._collectHitCountsPerRule()
         self._collectVlanData()
         self._buildApplicationServicePortMaps()
 
@@ -717,12 +718,96 @@ class PanoramaData:
                 return False
         return True
 
-    
-    def _collectHitCounts(self) -> None:
+    def _collectHitCountsPerRule(self) -> None:
         """
-        Collect hit counts for all rules in all device groups.
+        Call the *exact* XML you validated:
+
+        <show><rule-hit-count>
+          <device-group><entry name='DG'><pre-rulebase>
+            <entry name='RULETYPE'><rules>
+              <rule-name><entry name='RULENAME'/></rule-name>
+            </rules></entry></pre-rulebase>
+          </entry></device-group>
+        </rule-hit-count></show>
+
+        We loop every device-group / rule-type / rule to populate
+        hitCount, lastHit, created, modified.
         """
-        self.ruleHitCounts = defaultdict(lambda: defaultdict(int))
-        ruleStyles = [
-            ""
-        ]
+
+
+        rule_types = {
+            "SecurityRule": "security",
+            "NatRule": "nat",
+            "PolicyBasedForwarding": "pbf",
+            "ApplicationOverride": "application-override",
+            "DecryptionRule": "decryption",
+            "AuthenticationRule": "authentication",
+        }
+
+        metrics: dict[str, dict] = {}
+
+        for dg, bucket in self.deviceGroupRules.items():
+            for rt, rules in bucket.items():
+                apiName = rule_types.get(rt)
+                if not apiName:
+                    continue
+                for rule in rules:
+                    elem = self._get_rule_metrics(dg, apiName, rule.name)
+                    if elem is None:
+                        continue
+                    rid = f"{dg}:{rule.name}"
+                    metrics[rid] = elem
+
+        self.ruleMetrics = metrics
+        _LOG.info("Hit-count collected for %d rules", len(metrics))
+
+    def _get_rule_metrics(self, dg: str, rt: str, rn: str) -> dict | None:
+
+        import xml.etree.ElementTree as ET
+        import xml.dom.minidom as minidom
+        cmd = f"<show><rule-hit-count><device-group><entry name='{dg}'><pre-rulebase><entry name='{rt}'><rules><rule-name><entry name='{rn}'/></rule-name></rules></entry></pre-rulebase></entry></device-group></rule-hit-count></show>"
+        try: 
+            xmlAnswer = self.pano.op(cmd=cmd, cmd_xml=False)
+        except Exception as e:
+            _LOG.error("Hit Count Op Failed for %s/%s/%s: %s", dg, rt, rn, e)
+            return None
+        
+        toStr = ET.tostring(xmlAnswer, encoding='utf-8')
+        root = ET.fromstring(toStr)
+        dvEntries = root.findall(".//device-vsys/entry")
+        if not dvEntries:
+            _LOG.warning("No device-vsys entries found for %s/%s/%s", dg, rt, rn)
+            return None
+        hitSum = 0
+        lastHit = firstHit = created = modified = None
+        
+        for dv in dvEntries:
+            rawHit = dv.findtext("hit-count") or "0"   # ← returns "0" if empty/None
+            hitSum += int(rawHit)
+            
+            lh = dv.findtext("last-hit-timestamp")
+            fh = dv.findtext("first-hit-timestamp")
+            cr = dv.findtext("rule-creation-timestamp")
+            mo = dv.findtext("rule-modification-timestamp")
+
+            for tag, val in [("lh", lh), ("fh", fh), ("cr", cr), ("mo", mo)]:
+                if val and not val.isdigit():
+                    val = None
+            
+            if lh and(lastHit is None or int(lh) > lastHit):
+                lastHit = int(lh)
+            if fh and(firstHit is None or int(fh) < firstHit):
+                firstHit = int(fh)
+            if cr and(created is None or int(cr) < created):
+                created = int(cr)
+            if mo and(modified is None or int(mo) > modified):
+                modified = int(mo)
+
+        return { 
+            "hitCount": hitSum,
+            "lastHit": lastHit,
+            "firstHit": firstHit,
+            "created": created,
+            "modified": modified,
+        }
+

@@ -18,10 +18,12 @@ container, and that `index_template_ruleview.json` sits next to this file.
 
 from __future__ import annotations
 import argparse, json, os, sys, time, pathlib, requests, tqdm
+from datetime import datetime
 
 ES_HOST = os.getenv("ES_HOST" , "http://elasticsearch:9200")
-NDJSON  = pathlib.Path(os.getenv("NDJSON", "/app/out/rule_docs_test.ndjson"))
-INDEX   = os.getenv("INDEX" ,  "test-index")
+NDJSON  = pathlib.Path(os.getenv("NDJSON", "/app/out/ruleMetricsTest.ndjson"))
+prefix = os.getenv("INDEX", "test-index-")
+INDEX = prefix + datetime.now().strftime("%Y%m%d-%H")
 TPL_PATH = pathlib.Path("/app/test_template.json")   # shipped in image
 
 # ---------------------------------------------------------------------------

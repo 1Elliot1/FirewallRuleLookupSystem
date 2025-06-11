@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import List, Dict, Tuple, Set
 from datetime import datetime, timezone
-from .panoramaData import PanoramaData
+from panoramaData import PanoramaData
 import ipaddress, re
 
 PROTOCOL_TO_BYTE = {
@@ -130,9 +130,19 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                 doc["dstCidrs"] = dst_ip_ranges
                 doc["allCidrs"] = src_ip_ranges + dst_ip_ranges
 
+                info = panData.ruleMetrics.get(ruleId, {})
+                
+                doc.update({
+                    "hitCount": info.get("hitCount", 0),
+                    "lastHit": info.get("lastHit", None),
+                    "firstHit": info.get("firstHit", None),
+                    "created": info.get("created", None),
+                    "lastModified": info.get("lastModified", None)
+                })
+
                 doc["ruleWeight"] = panData.calcRuleWeight(doc)
                 doc["isShadowed"] = panData.isShadowed(doc, docs)
-                
+
                 docs.append(doc)
     
     return docs
