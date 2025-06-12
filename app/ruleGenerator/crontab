@@ -1,0 +1,2 @@
+30 16 * * * /bin/sh -c 'DSTAMP=$(date -u +\%Y\%m\%d\%H\%M); python /app/src/generateRuleDocs.py --out "/app/out/ruleMetrics-${DSTAMP}.ndjson"'
+

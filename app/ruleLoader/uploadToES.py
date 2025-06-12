@@ -20,11 +20,19 @@ from __future__ import annotations
 import argparse, json, os, sys, time, pathlib, requests, tqdm
 from datetime import datetime
 
+NOW = datetime.now()
 ES_HOST = os.getenv("ES_HOST" , "http://elasticsearch:9200")
-NDJSON  = pathlib.Path(os.getenv("NDJSON", "/app/out/ruleMetricsTest.ndjson"))
-prefix = os.getenv("INDEX", "test-index-")
-INDEX = prefix + datetime.now().strftime("%Y%m%d-%H")
 TPL_PATH = pathlib.Path("/app/test_template.json")   # shipped in image
+
+OUT_DIR = pathlib.Path("/app/out")
+candidates = sorted(OUT_DIR.glob("ruleMetrics-*.ndjson"), key=lambda p: p.stat().st_mtime, reverse=True)
+if not candidates:
+    print("no NDJSON to upload – exiting")
+    sys.exit(0)
+NDJSON = candidates[-1]
+
+prefix = os.getenv("INDEX_PREFIX", "test-index")
+INDEX  = f"{prefix}-{datetime.now():%Y%m%d%H%M}"
 
 # ---------------------------------------------------------------------------
 
