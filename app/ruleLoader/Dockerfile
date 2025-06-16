@@ -5,3 +5,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY uploadToES.py .
 COPY test_template.json /app/test_template.json
+
+CMD ["python", "uploadToES.py", "--watch"]

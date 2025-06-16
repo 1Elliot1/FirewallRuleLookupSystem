@@ -58,8 +58,7 @@ from panos.objects import (
 )
 from panos.predefined import Predefined
 
-_LOG = logging.getLogger("panoramaData")
-_LOG.basicConfig(level=logging.DEBUG)
+_LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 #  Setup/Helpers
@@ -84,7 +83,8 @@ def _ip_in_cidr(ip: str, cidr: str) -> bool:
     """Fast *utility* used by higher‑level correlation helpers."""
     try:
         network = ipaddress.ip_network(cidr.strip("'[]"), strict=False)
-    except ValueError:
+    except ValueError as exc:
+        _LOG.warning("Invalid CIDR '%s' for IP check: %s", cidr, exc)
         return False
 
     if network.prefixlen == 0:  # 0.0.0.0/0 catch‑all. Ignore
@@ -97,7 +97,8 @@ def _ip_in_cidr(ip: str, cidr: str) -> bool:
                 subject.version == network.version and subject.subnet_of(network)
             )
         return ipaddress.ip_address(ip) in network
-    except ValueError:
+    except ValueError as exc:
+        _LOG.warning("Invalid IP '%s' for CIDR check '%s': %s", ip, cidr, exc)
         return False
 
 
@@ -444,8 +445,6 @@ class PanoramaData:
                 resolved.append(app)
             elif app in self.appGroupByName:
                 resolved.extend(self._expandAppGroup(app))
-            # elif app in self.appContainerByName:
-            #     resolved.extend(self._expandAppContainer(app))
             elif app in self.predefContainerByName:
                 resolved.extend(self._expandPredefContainer(app))
             else:
@@ -476,8 +475,6 @@ class PanoramaData:
         for member in getattr(grp, "value", []):
             if member in self.appGroupByName:
                 leaves.extend(self._expandAppGroup(member))
-            # elif member in self.appContainerByName:
-            #     leaves.extend(self._expandAppContainer(member))
             elif member in self.predefContainerByName:
                 leaves.extend(self._expandPredefContainer(member))
             else:
