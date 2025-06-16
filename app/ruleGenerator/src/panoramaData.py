@@ -59,6 +59,7 @@ from panos.objects import (
 from panos.predefined import Predefined
 
 _LOG = logging.getLogger("panoramaData")
+_LOG.basicConfig(level=logging.DEBUG)
 
 # ---------------------------------------------------------------------------
 #  Setup/Helpers

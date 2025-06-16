@@ -19,19 +19,22 @@ container, and that `index_template_ruleview.json` sits next to this file.
 from __future__ import annotations
 import argparse, json, os, sys, time, pathlib, requests, tqdm
 from datetime import datetime
+import threading
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 NOW = datetime.now()
 ES_HOST = os.getenv("ES_HOST" , "http://elasticsearch:9200")
 TPL_PATH = pathlib.Path("/app/test_template.json")   # shipped in image
-
 OUT_DIR = pathlib.Path("/app/out")
+prefix = os.getenv("INDEX_PREFIX", "test-index")
+
 candidates = sorted(OUT_DIR.glob("ruleMetrics-*.ndjson"), key=lambda p: p.stat().st_mtime, reverse=True)
 if not candidates:
     print("no NDJSON to upload – exiting")
     sys.exit(0)
 NDJSON = candidates[-1]
 
-prefix = os.getenv("INDEX_PREFIX", "test-index")
 INDEX  = f"{prefix}-{datetime.now():%Y%m%d%H%M}"
 
 # ---------------------------------------------------------------------------
