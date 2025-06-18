@@ -622,10 +622,13 @@ class PanoramaData:
         D = len(doc["destination"]["address"]["objects"])
         serv = len(doc["services"])
         apps = len(doc["applications"])
+        if S * D != 0:
+            metricLogged = math.log(S*D, 10)
+        else: 
+            metricLogged = 1
         weight = int((
             #Weight = numImpactedDevices + [(numServices * 5) + (numApplications * 5) || 100 if applications AND services == "Any"]  
-            math.log(S*D, 10) 
-            * 10
+            metricLogged * 10
             + (serv * 3)
             + (apps * 3)
         ))
