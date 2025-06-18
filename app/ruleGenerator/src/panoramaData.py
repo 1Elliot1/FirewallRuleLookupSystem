@@ -23,6 +23,7 @@ import ipaddress
 import logging
 from collections import defaultdict
 from functools import lru_cache
+import math
 from typing import Dict, List, Set, Tuple
 import yaml
 from pathlib import Path
@@ -617,12 +618,20 @@ class PanoramaData:
 
     # -------------- Additional Metrics for Elasticsearch ----------
     def calcRuleWeight(self, doc: dict) -> int:
-        weight = (
-            len(doc["source"]["address"]["objects"]) 
-            + len(doc["destination"]["address"]["objects"])
-            + len(doc["services"]) * 5
-            + len(doc["applications"]) * 5
-        )
+        S = len(doc["source"]["address"]["objects"])
+        D = len(doc["destination"]["address"]["objects"])
+        serv = len(doc["services"])
+        apps = len(doc["applications"])
+        weight = int((
+            #Weight = numImpactedDevices + [(numServices * 5) + (numApplications * 5) || 100 if applications AND services == "Any"]  
+            math.log(S*D, 10) 
+            * 10
+            + (serv * 3)
+            + (apps * 3)
+        ))
+        if "any" in doc["applications"] and "any" in doc["services"]:
+            #adding 90 to account for fact that the ANY entry in both adds 5 each
+            weight += 24
         return weight
 
     def isShadowed(self, candidate: dict, earlier: list[dict]) -> bool:

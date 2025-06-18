@@ -15,6 +15,7 @@ ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 TPL_PATH = pathlib.Path("/app/test_template.json")
 OUT_DIR = pathlib.Path("/app/out")
 prefix = os.getenv("INDEX_PREFIX", "test-index")
+ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY")
 
 class RuleFileHandler(FileSystemEventHandler):
     def __init__(self):
@@ -63,7 +64,11 @@ class RuleFileHandler(FileSystemEventHandler):
 
 def putTemplate() -> None:
     tpl = json.load(TPL_PATH.open(encoding="utf-8"))
-    r = requests.put(f"{ES_HOST}/_index_template/test_template", json=tpl)
+    r = requests.put(
+        f"{ES_HOST}/_index_template/test_template",
+        json=tpl,
+        headers=esHeaders({"Content-Type": "application/json"})
+    )
     r.raise_for_status()
 
 def iterBulkLines(path: pathlib.Path, index_name: str):
@@ -74,6 +79,15 @@ def iterBulkLines(path: pathlib.Path, index_name: str):
                 continue
             yield action + "\n"
             yield doc if doc.endswith("\n") else doc + "\n"
+
+def esHeaders(extra: dict | None = None) -> dict:
+    """
+    Return base headers (+ any caller specific ones) with API key Auth
+    """
+    header = extra.copy() if extra else {}
+    if ELASTIC_API_KEY:
+        header["Authorization"] = f"ApiKey {ELASTIC_API_KEY}"
+    return header
 
 def bulkLoad(ndjson_path: pathlib.Path, index_name: str) -> None:
     if not ndjson_path.exists():
@@ -101,7 +115,7 @@ def bulkLoad(ndjson_path: pathlib.Path, index_name: str) -> None:
     r = requests.post(
         f"{ES_HOST}/{index_name}/_bulk",
         data=gen(),
-        headers={"Content-Type": "application/x-ndjson"},
+        headers=esHeaders({"Content-Type": "application/x-ndjson"}),
         params={"refresh": "true"}
     )
     bar.close()
@@ -177,7 +191,7 @@ if __name__ == "__main__":
         if args.replace_index:
             # Delete existing indices if requested
             try:
-                r = requests.delete(f"{ES_HOST}/{prefix}-*")
+                r = requests.delete(f"{ES_HOST}/{prefix}-*", headers=esHeaders())
                 print(f"🗑️  Cleaned up old indices")
             except:
                 pass
