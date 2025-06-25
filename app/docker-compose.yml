@@ -53,7 +53,7 @@ services:
         condition: service_healthy
     volumes:
       - ./out:/app/out:ro
-    env_file:               # ① add this
+    env_file:              
       - .env
     environment:
       - ES_HOST=http://elasticsearch:9200

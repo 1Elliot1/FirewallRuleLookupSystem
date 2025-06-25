@@ -12,7 +12,7 @@ from watchdog.events import FileSystemEventHandler
 
 NOW = datetime.now()
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-TPL_PATH = pathlib.Path("/app/test_template.json")
+TPL_PATH = pathlib.Path(os.getenv("TPL_PATH", "/app/test_template.json"))
 OUT_DIR = pathlib.Path("/app/out")
 prefix = os.getenv("INDEX_PREFIX", "test-index")
 ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY")
