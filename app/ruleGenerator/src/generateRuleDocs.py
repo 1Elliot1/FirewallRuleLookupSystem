@@ -28,6 +28,7 @@ logMessage("Script started")
 load_dotenv()
 panAddr = os.getenv("PAN_ADDRESS")
 apiKey  = os.getenv("API_KEY")
+defaultOut = os.getenv("NDJSON", "/app/out/ruleMetricsTest.ndjson")
 
 logMessage(f"PAN_ADDRESS: {'SET' if panAddr else 'NOT SET'}")
 logMessage(f"API_KEY: {'SET' if apiKey else 'NOT SET'}")
@@ -36,7 +37,7 @@ if not panAddr or not apiKey:
     raise RuntimeError("PAN_ADDRESS or API_KEY env-var is empty or missing")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--out", default="/app/out/ruleMetricsTest.ndjson")
+parser.add_argument("--out", default=defaultOut)
 args = parser.parse_args()
 
 logMessage(f"Output file: {args.out}")
