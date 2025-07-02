@@ -23,6 +23,7 @@ import ipaddress
 import logging
 from collections import defaultdict
 from functools import lru_cache
+import math
 from typing import Dict, List, Set, Tuple
 import yaml
 from pathlib import Path
@@ -31,13 +32,14 @@ from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
     PreRulebase,
     #PostRulebase,
-    #Rulebase,
+    RulebaseHitCount,
     SecurityRule,
     NatRule,
     ApplicationOverride,
     PolicyBasedForwarding,
     DecryptionRule,
     AuthenticationRule,
+
 )
 from panos.network import (
     AggregateInterface,
@@ -57,7 +59,7 @@ from panos.objects import (
 )
 from panos.predefined import Predefined
 
-_LOG = logging.getLogger("panoramaData")
+_LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 #  Setup/Helpers
@@ -82,7 +84,8 @@ def _ip_in_cidr(ip: str, cidr: str) -> bool:
     """Fast *utility* used by higher‑level correlation helpers."""
     try:
         network = ipaddress.ip_network(cidr.strip("'[]"), strict=False)
-    except ValueError:
+    except ValueError as exc:
+        _LOG.warning("Invalid CIDR '%s' for IP check: %s", cidr, exc)
         return False
 
     if network.prefixlen == 0:  # 0.0.0.0/0 catch‑all. Ignore
@@ -95,7 +98,8 @@ def _ip_in_cidr(ip: str, cidr: str) -> bool:
                 subject.version == network.version and subject.subnet_of(network)
             )
         return ipaddress.ip_address(ip) in network
-    except ValueError:
+    except ValueError as exc:
+        _LOG.warning("Invalid IP '%s' for CIDR check '%s': %s", ip, cidr, exc)
         return False
 
 
@@ -137,6 +141,9 @@ class PanoramaData:
     #predefined application containers -> Member leaves
     _predefinedContainerLeaves: Dict[str, List[str]] = {}  
 
+    #{ruleID: {hit, lastHit, created, modified}}
+    ruleMetrics: Dict[str, dict]
+
     def __init__(self, pano: Panorama) -> None:
         self.pano = pano
         self._refreshPanoramaInventory()
@@ -148,10 +155,17 @@ class PanoramaData:
         self.vlanData = {}
 
         self._collectDeviceGroupRules()
+        self._collectHitCountsPerRule()
         self._collectVlanData()
         self._buildApplicationServicePortMaps()
 
         self._applyStaticOverrides()
+
+        #TEST LINES:
+        logging.info(self.serviceToPorts["exampleService"]["tcp"] == ["8080", "8443"])
+        logging.info("exampleApp0" in self.appGroupByName["exampleAppGroup"].value)
+        logging.info(self.addressGroupByName["exampleAddressGroup"].static_value)
+        logging.info(self.vlanData["IC-datacenter-template-vsys1"]["vlanMap"]["8008"] == "123.123.123.0/26")
 
     # ------------------------------------------------------------------
     #  Inventory Private Methods
@@ -326,6 +340,12 @@ class PanoramaData:
 
                     for part in blob.split(","):
                         part = part.strip()
+                        #Support for port ranges (e.g. "80-90")
+                        if "-" in part:
+                            low, high = map(int, part.split("-", 1))
+                            for p in range (low, high + 1):
+                                ports[proto].append(str(p))
+                                portToEntities[f"{proto}/{p}"]["applications"].append(app.name)
                         ports[proto].append(part)
                         portToEntities[f"{proto}/{part}"]["applications"].append(app.name)
                 except ValueError:
@@ -339,8 +359,20 @@ class PanoramaData:
             proto = svc.protocol.lower()
             if proto not in {"tcp", "udp", "icmp"}:
                 continue 
-            self.serviceToPorts[svc.name] = {proto: [svc.destination_port]}
-            portToEntities[f"{proto}/{svc.destination_port}"]["services"].append(svc.name)
+
+            self.serviceToPorts.setdefault(svc.name, {}).setdefault(proto, [])
+
+            #Support for port ranges (e.g. "80-90")
+            if "-" in svc.destination_port:
+                low, high = map(int, svc.destination_port.split("-", 1))
+                for p in range(low, high + 1):
+                    port = str(p)
+                    self.serviceToPorts[svc.name][proto].append(port)
+                    portToEntities[f"{proto}/{port}"]["services"].append(svc.name)
+            else:
+                port = svc.destination_port.strip()
+                self.serviceToPorts[svc.name][proto].append(port)
+                portToEntities[f"{proto}/{port}"]["services"].append(svc.name)
 
         self.portToEntities = dict(portToEntities)
         _LOG.info("Port maps built: %d apps, %d services", len(self.applicationToPorts), len(self.serviceToPorts))
@@ -438,8 +470,6 @@ class PanoramaData:
                 resolved.append(app)
             elif app in self.appGroupByName:
                 resolved.extend(self._expandAppGroup(app))
-            # elif app in self.appContainerByName:
-            #     resolved.extend(self._expandAppContainer(app))
             elif app in self.predefContainerByName:
                 resolved.extend(self._expandPredefContainer(app))
             else:
@@ -470,8 +500,6 @@ class PanoramaData:
         for member in getattr(grp, "value", []):
             if member in self.appGroupByName:
                 leaves.extend(self._expandAppGroup(member))
-            # elif member in self.appContainerByName:
-            #     leaves.extend(self._expandAppContainer(member))
             elif member in self.predefContainerByName:
                 leaves.extend(self._expandPredefContainer(member))
             else:
@@ -544,9 +572,12 @@ class PanoramaData:
             "resolvedPorts": sorted(resolvedPorts),
             "portReasoning": reasoning,
         }
-    
+
+#Constant to get the absoulte path of yaml file:
+    DEFAULT_STATIC_OVERRIDES = Path(__file__).resolve().parent / "staticOverrides.yml"
     # ------Static Override YAML Loader----------------------------------
-    def _applyStaticOverrides(self, path: str | Path = "staticOverrides.yml") -> None:
+    def _applyStaticOverrides(self, path: str | Path | None = None) -> None:
+        path = Path(path or self.DEFAULT_STATIC_OVERRIDES)
         """
         Load static overrides from a YAML file and apply them to the inventory
         for overriding or adding specific rules or objects not captured by the API
@@ -562,53 +593,434 @@ class PanoramaData:
             return
         
         # ----- Applications to Ports
-        for app, protoMap in data.get("applications", {}).items():
-            self.applicationToPorts.setdefault(app, {})
-            for proto, ports in (protoMap or {}).items():
-                proto = proto.lower()
-                self.applicationToPorts[app].setdefault(proto, [])
-                self.applicationToPorts[app][proto].extend(ports)
+        for app, entry in (data.get("applications") or {}).items():
+            mode, payload = self._extractMode(entry)
+            # payload should be {proto: [ports]}
+            portsMap = {proto.lower(): list(ports)
+                        for proto, ports in (payload or {}).items()}
+
+            exists = app in self.applicationToPorts
+
+            def create():
+                self.applicationToPorts[app] = portsMap
+
+            def overwrite():
+                self.applicationToPorts[app] = portsMap
+
+            def merge():
+                target = self.applicationToPorts.setdefault(app, {})
+                for proto, portList in portsMap.items():
+                    target.setdefault(proto, [])
+                    #If a port list per protocol is already defined, extend it. If not add the new protocol + ports
+                    target[proto].extend(
+                        p for p in portList if p not in target[proto]
+                    )
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Application Groups
-        for group, members in (data.get("applicationGroups") or {}).items():
-            self.appGroupByName.setdefault(group, ApplicationGroup(name=group, value = []))
-            existing = set(getattr(self.appGroupByName[group], "value", []))
-            self.appGroupByName[group].value = list(existing.union(members))
+        for group, entry in (data.get("applicationGroups") or {}).items():
+            mode, payload = self._extractMode(entry)
+            members = list(payload.get("members", []))
+
+            exists = group in self.appGroupByName
+
+            def create():
+                self.appGroupByName[group] = ApplicationGroup(
+                    name=group, value=list(members)
+                )
+
+            def overwrite():
+                self.appGroupByName[group].value = list(members)
+
+            def merge():
+                g = self.appGroupByName[group]
+                g.value = list(set(g.value or []).union(members))
+            
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Services to Ports
-        for svc, protoMap in data.get("services", {}).items():
-            self.serviceToPorts.setdefault(svc, {})
-            for proto, ports in (protoMap or {}).items():
-                proto = proto.lower()
-                self.serviceToPorts[svc].setdefault(proto, [])
-                self.serviceToPorts[svc][proto].extend(ports)
+        for svc, entry in (data.get("services") or {}).items():
+            mode, payload = self._extractMode(entry)
+            portsMap = {proto.lower(): list(ports)
+                        for proto, ports in (payload or {}).items()}
+        
+            exists = svc in self.serviceToPorts
+            
+            def create():
+                self.serviceToPorts[svc] = portsMap
+            
+            def overwrite():
+                self.serviceToPorts[svc] = portsMap
+
+            def merge():
+                target = self.serviceToPorts.setdefault(svc, {})
+                for proto, portList in portsMap.items():
+                    target.setdefault(proto, [])
+                    target[proto].extend(p for p in portList if p not in target[proto])
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Address Objects
-        for name, cidr in (data.get("addressObjects") or {}).items():
-            if name not in self.addressObjectByName:
+        for name, entry in (data.get("addressObjects") or {}).items():
+            mode, payload = self._extractMode(entry)
+            
+            #payload -> cidr string
+            if isinstance(payload, dict):
+                cidr = payload.get("value")
+            else:
+                cidr = payload
+            
+            #check if address object already exists
+            exists = name in self.addressObjectByName
+
+            def create():
                 self.addressObjectByName[name] = AddressObject(name=name, value=cidr)
-                try:
-                    net = ipaddress.ip_network(cidr, strict=False)
-                    self._nets.append((net, name))
-                except ValueError:
-                    _LOG.warning("Invalid CIDR '%s' for address object '%s'", cidr, name)
-                    pass
+                self._addToNets(name, cidr)
+            
+            def overwrite():
+                self.addressObjectByName[name].value = cidr
+                self._addToNets(name, cidr, replace=True)
+            
+            def merge():
+                #address objects have a single value, so merging = no operation
+                pass
+        
+            self._applyByMode(mode, exists, merge, overwrite, create)
 
         # ----- Address Groups
-        for group, members in (data.get("addressGroups") or {}).items():
-            ag = self.addressGroupByName.setdefault(group, AddressGroup(name=group, static_value=[]))
-            ag.static_value = list(set(ag.static_value or []).union(members))
-            for m in members:
-                self._addrToGroup.setdefault(m, []).append(group)
+        for group, entry in (data.get("addressGroups") or {}).items():
+            mode, payload = self._extractMode(entry)
+            members = list(payload.get("members", [])) if isinstance(payload, dict) else payload
+            
+            exists = group in self.addressGroupByName
 
-        # ----- VLAN / Zone 
-        for key, vlanMap in (data.get("vlans") or {}).items():
-            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
-            self.vlanData[key]["vlanMap"].update(vlanMap)
+            def create():
+                self.addressGroupByName[group] = AddressGroup(
+                    name=group, static_value=list(members)
+                )
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
 
-        for key, zones in (data.get("zones") or {}).items():
-            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
-            self.vlanData[key]["zones"].extend(z for z in zones if z not in self.vlanData[key]["zones"])
+            def overwrite():
+                self.addressGroupByName[group].static_value = list(members)
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
+
+            def merge():
+                ag = self.addressGroupByName[group]
+                ag.static_value = list(set(ag.static_value or []).union(members))
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
+
+        # ----- VLANs  
+        for templateKey, vlanMap in data.get("vlans", {}).items():
+            self.vlanData.setdefault(templateKey, {"vlanMap": {}, "zones": []})
+
+            for vlanID, entry in vlanMap.items():
+                mode, payload = self._extractMode(entry)
+                cidr = payload if isinstance(payload, str) else payload.get("value")
+
+                exists = vlanID in self.vlanData[templateKey]["vlanMap"]
+
+                def create():
+                    self.vlanData[templateKey]["vlanMap"][vlanID] = cidr
+
+                def overwrite():
+                    self.vlanData[templateKey]["vlanMap"][vlanID] = cidr
+
+                def merge():
+                    #Vlans have a single value, so merging = no operation
+                    pass
+
+                self._applyByMode(
+                    mode, exists, merge, overwrite, create
+                )
+
+        # ----- Zones
+        for templateKey, entry in data.get("zones", {}).items():
+            mode, payload = self._extractMode(entry)
+            newZones = list(payload.get("members", [])) if isinstance(payload, dict) else list(entry)
+
+            self.vlanData.setdefault(templateKey, {"vlanMap": {}, "zones":[]})
+            exists = bool(self.vlanData[templateKey]["zones"])
+
+            def create():
+                self.vlanData[templateKey]["zones"].extend(newZones)
+
+            def overwrite():
+                self.vlanData[templateKey]["zones"] = list(newZones)
+
+            def merge():
+                prevZones = self.vlanData[templateKey]["zones"]
+                prevZones.extend(z for z in newZones if z not in prevZones)
+
+            self._applyByMode(
+                mode, exists, merge, overwrite, create
+            )
 
         _LOG.info("Static overrides from %s merged", path)
+
+    def _addToNets(self, name: str, cidr: str, *, replace: bool = False) -> None:
+        """
+        Keep self._nets [(ip_network, objName), …] in sync with addressObjects.
+
+        • replace=True → delete any old tuple for `name` before appending new one
+        • silently ignores invalid CIDRs (already logged upstream)
+        """
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            return
+
+        if replace:
+            self._nets[:] = [t for t in self._nets if t[1] != name]
+
+        self._nets.append((net, name))
+
+    def _extractMode(self, blob, default="merge"):
+        """
+        Returns (mode, payload_dict)
+        Extracts the '_mode' from a single staticOverrides object entry and returns it with the rest of the payload.
+        • blob can be a scalar, list, or mapping.
+        • If it's a mapping and contains '_mode', pop it.
+        • Everything else is returned as payload.
+        """
+        if isinstance(blob, dict) and "_mode" in blob:
+            mode = str(blob.pop("_mode")).lower()
+        else:
+            mode = default
+        return mode, blob
+
+    def _applyByMode(
+            self,
+            mode: str, 
+            exists: bool,
+            mergeFn: callable,
+            overwriteFn: callable,
+            createFn: callable,
+    ):
+        """
+        Dispatch convenience for static overrides.
+
+        • mode       - 'merge' | 'overwrite' | 'if_nonexistent'
+        • exists     - does an object of that name already exist?
+        • mergeFn    - called when mode=='merge'  and exists
+        • overwriteFn- called when mode=='overwrite' and exists
+        • createFn   - called when object needs to be created
+        """
+        if exists:
+            if mode == "overwrite":
+                overwriteFn()
+            elif mode == "merge":
+                mergeFn()
+        else:
+            createFn()
+
+    # -------------- Additional Metrics for Elasticsearch ----------
+    def calcRuleWeight(self, doc: dict) -> int:
+        S = len(doc["source"]["address"]["objects"])
+        D = len(doc["destination"]["address"]["objects"])
+        serv = len(doc["services"])
+        apps = len(doc["applications"])
+        if S * D != 0:
+            metricLogged = math.log(S*D, 10)
+        else: 
+            metricLogged = 1
+        weight = int((
+            #Weight = numImpactedDevices + [(numServices * 5) + (numApplications * 5) || 100 if applications AND services == "Any"]  
+            metricLogged * 10
+            + (serv * 3)
+            + (apps * 3)
+        ))
+        if "any" in doc["applications"] and "any" in doc["services"]:
+            #adding 90 to account for fact that the ANY entry in both adds 5 each
+            weight += 24
+        return weight
+
+    def isShadowed(self, candidate: dict, earlier: list[dict]) -> bool:
+        """
+        Check if the canidate rule is shadowed by any of the earlier rules
+        """
+        for sup in earlier:                                     # iterate top-down
+            if sup["action"] != candidate["action"]:
+                continue
+
+            if not self._subset(candidate["source"]["zones"], sup["source"]["zones"]):
+                continue
+            if not self._subset(candidate["destination"]["zones"], sup["destination"]["zones"]):
+                continue
+            if not self._subset(candidate["applications"], sup["applications"]):
+                continue
+            if not self._subset(candidate["services"], sup["services"]):
+                continue
+            if not self._cidrs_cover(                         # src CIDRs
+                    candidate["source"]["address"]["cidr"],
+                    sup["source"]["address"]["cidr"]
+                ):
+                continue
+            if not self._cidrs_cover(                         # dst CIDRs
+                    candidate["destination"]["address"]["cidr"],
+                    sup["destination"]["address"]["cidr"]
+                ):
+                continue
+            return True                                       # first match wins
+        return False
+    
+    @staticmethod
+    def _subset(needle: list[str], haystack: list[str]) -> bool:
+        """`needle` is fully contained in `haystack` (handles `"any"` joker)."""
+        if not needle:               # empty == wildcard
+            return True
+        if "any" in haystack:
+            return True
+        return set(needle).issubset(haystack)
+    
+    @staticmethod
+    def _cidrs_cover(child: list[str | dict], parent: list[str | dict]) -> bool:
+        """
+        Returns True if every element in *child* is fully contained in at least one
+        element in *parent*.  Elements can be:
+            • CIDR string  "10.1.0.0/16"
+            • range dict   {"gte":"10.1.0.5","lte":"10.1.0.20"}
+        """
+        #TODO: Look back at this catch all logic, does it make sense for shadows?
+        if not child:
+            return True
+        if "any" in parent:
+            return True
+
+        # –– normalise parent list into list of ipaddress.IPv[4|6]Network or tuples
+        parent_norm = []
+        for p in parent:
+            if isinstance(p, dict):
+                parent_norm.append((
+                    ipaddress.ip_address(p["gte"]),
+                    ipaddress.ip_address(p["lte"]),
+                ))
+            else:
+                parent_norm.append(ipaddress.ip_network(p, strict=False))
+
+        # –– for every element in child, find a covering parent ––––––––––––––––
+        for c in child:
+            if isinstance(c, dict):
+                c_lo = ipaddress.ip_address(c["gte"])
+                c_hi = ipaddress.ip_address(c["lte"])
+                ok = any(
+                    # parent is range
+                    (isinstance(p, tuple) and p[0] <= c_lo <= c_hi <= p[1]) or
+                    # parent is CIDR
+                    (not isinstance(p, tuple) and
+                    c_lo in p and c_hi in p)
+                    for p in parent_norm
+                )
+            else:
+                c_net = ipaddress.ip_network(c, strict=False)
+                ok = any(
+                    # parent is range
+                    (isinstance(p, tuple) and
+                    p[0] <= c_net.network_address and
+                    c_net.broadcast_address <= p[1]) or
+                    # parent is CIDR
+                    (not isinstance(p, tuple) and c_net.subnet_of(p))
+                    for p in parent_norm
+                )
+            if not ok:
+                return False
+        return True
+
+    def _collectHitCountsPerRule(self) -> None:
+        """
+        Call the *exact* XML you validated:
+
+        <show><rule-hit-count>
+          <device-group><entry name='DG'><pre-rulebase>
+            <entry name='RULETYPE'><rules>
+              <rule-name><entry name='RULENAME'/></rule-name>
+            </rules></entry></pre-rulebase>
+          </entry></device-group>
+        </rule-hit-count></show>
+
+        We loop every device-group / rule-type / rule to populate
+        hitCount, lastHit, created, modified.
+        """
+
+
+        rule_types = {
+            "SecurityRule": "security",
+            "NatRule": "nat",
+            "PolicyBasedForwarding": "pbf",
+            "ApplicationOverride": "application-override",
+            "DecryptionRule": "decryption",
+            "AuthenticationRule": "authentication",
+        }
+
+        metrics: dict[str, dict] = {}
+
+        for dg, bucket in self.deviceGroupRules.items():
+            for rt, rules in bucket.items():
+                apiName = rule_types.get(rt)
+                if not apiName:
+                    continue
+                for rule in rules:
+                    elem = self._get_rule_metrics(dg, apiName, rule.name)
+                    if elem is None:
+                        continue
+                    rid = f"{dg}:{rule.name}"
+                    metrics[rid] = elem
+
+        self.ruleMetrics = metrics
+        _LOG.info("Hit-count collected for %d rules", len(metrics))
+
+    def _get_rule_metrics(self, dg: str, rt: str, rn: str) -> dict | None:
+
+        import xml.etree.ElementTree as ET
+        import xml.dom.minidom as minidom
+        cmd = f"<show><rule-hit-count><device-group><entry name='{dg}'><pre-rulebase><entry name='{rt}'><rules><rule-name><entry name='{rn}'/></rule-name></rules></entry></pre-rulebase></entry></device-group></rule-hit-count></show>"
+        try: 
+            xmlAnswer = self.pano.op(cmd=cmd, cmd_xml=False)
+        except Exception as e:
+            _LOG.error("Hit Count Op Failed for %s/%s/%s: %s", dg, rt, rn, e)
+            return None
         
+        toStr = ET.tostring(xmlAnswer, encoding='utf-8')
+        root = ET.fromstring(toStr)
+        dvEntries = root.findall(".//device-vsys/entry")
+        if not dvEntries:
+            _LOG.warning("No device-vsys entries found for %s/%s/%s", dg, rt, rn)
+            return None
+        hitSum = 0
+        lastHit = firstHit = created = modified = None
+        
+        for dv in dvEntries:
+            rawHit = dv.findtext("hit-count") or "0"   # ← returns "0" if empty/None
+            hitSum += int(rawHit)
+            
+            lh = dv.findtext("last-hit-timestamp")
+            fh = dv.findtext("first-hit-timestamp")
+            cr = dv.findtext("rule-creation-timestamp")
+            mo = dv.findtext("rule-modification-timestamp")
+
+            for tag, val in [("lh", lh), ("fh", fh), ("cr", cr), ("mo", mo)]:
+                if val and not val.isdigit():
+                    val = None
+            
+            if lh and(lastHit is None or int(lh) > lastHit):
+                lastHit = int(lh)
+            if fh and(firstHit is None or int(fh) < firstHit):
+                firstHit = int(fh)
+            if cr and(created is None or int(cr) < created):
+                created = int(cr)
+            if mo and(modified is None or int(mo) > modified):
+                modified = int(mo)
+
+        return { 
+            "hitCount": hitSum,
+            "lastHit": lastHit,
+            "firstHit": firstHit,
+            "created": created,
+            "modified": modified,
+        }
+
