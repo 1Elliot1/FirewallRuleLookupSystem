@@ -555,6 +555,11 @@ class PanoramaData:
                             f"{app} (application-default)"
                         )
 
+        if serviceFieldRaw == ["any"]:
+            resolvedPorts.update({"tcp/*", "udp/*"})
+            reasoning.setdefault("tcp/*", []).append("Service Any")
+            reasoning.setdefault("udp/*", []).append("Service Any")
+
         # --- explicit service objects --------------------------------
         for svc in services:
             if svc == "application-default":
