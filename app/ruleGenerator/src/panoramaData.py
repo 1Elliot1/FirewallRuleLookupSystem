@@ -161,6 +161,12 @@ class PanoramaData:
 
         self._applyStaticOverrides()
 
+        #TEST LINES:
+        logging.info(self.serviceToPorts["exampleService"]["tcp"] == ["8080", "8443"])
+        logging.info("exampleApp0" in self.appGroupByName["exampleAppGroup"].value)
+        logging.info(self.addressGroupByName["exampleAddressGroup"].static_value)
+        logging.info(self.vlanData["IC-datacenter-template-vsys1"]["vlanMap"]["8008"] == "123.123.123.0/26")
+
     # ------------------------------------------------------------------
     #  Inventory Private Methods
     # ------------------------------------------------------------------
@@ -334,6 +340,12 @@ class PanoramaData:
 
                     for part in blob.split(","):
                         part = part.strip()
+                        #Support for port ranges (e.g. "80-90")
+                        if "-" in part:
+                            low, high = map(int, part.split("-", 1))
+                            for p in range (low, high + 1):
+                                ports[proto].append(str(p))
+                                portToEntities[f"{proto}/{p}"]["applications"].append(app.name)
                         ports[proto].append(part)
                         portToEntities[f"{proto}/{part}"]["applications"].append(app.name)
                 except ValueError:
@@ -347,8 +359,20 @@ class PanoramaData:
             proto = svc.protocol.lower()
             if proto not in {"tcp", "udp", "icmp"}:
                 continue 
-            self.serviceToPorts[svc.name] = {proto: [svc.destination_port]}
-            portToEntities[f"{proto}/{svc.destination_port}"]["services"].append(svc.name)
+
+            self.serviceToPorts.setdefault(svc.name, {}).setdefault(proto, [])
+
+            #Support for port ranges (e.g. "80-90")
+            if "-" in svc.destination_port:
+                low, high = map(int, svc.destination_port.split("-", 1))
+                for p in range(low, high + 1):
+                    port = str(p)
+                    self.serviceToPorts[svc.name][proto].append(port)
+                    portToEntities[f"{proto}/{port}"]["services"].append(svc.name)
+            else:
+                port = svc.destination_port.strip()
+                self.serviceToPorts[svc.name][proto].append(port)
+                portToEntities[f"{proto}/{port}"]["services"].append(svc.name)
 
         self.portToEntities = dict(portToEntities)
         _LOG.info("Port maps built: %d apps, %d services", len(self.applicationToPorts), len(self.serviceToPorts))
@@ -548,9 +572,12 @@ class PanoramaData:
             "resolvedPorts": sorted(resolvedPorts),
             "portReasoning": reasoning,
         }
-    
+
+#Constant to get the absoulte path of yaml file:
+    DEFAULT_STATIC_OVERRIDES = Path(__file__).resolve().parent / "staticOverrides.yml"
     # ------Static Override YAML Loader----------------------------------
-    def _applyStaticOverrides(self, path: str | Path = "app/src/staticOverrides.yml") -> None:
+    def _applyStaticOverrides(self, path: str | Path | None = None) -> None:
+        path = Path(path or self.DEFAULT_STATIC_OVERRIDES)
         """
         Load static overrides from a YAML file and apply them to the inventory
         for overriding or adding specific rules or objects not captured by the API
@@ -566,55 +593,231 @@ class PanoramaData:
             return
         
         # ----- Applications to Ports
-        for app, protoMap in data.get("applications", {}).items():
-            self.applicationToPorts.setdefault(app, {})
-            for proto, ports in (protoMap or {}).items():
-                proto = proto.lower()
-                self.applicationToPorts[app].setdefault(proto, [])
-                self.applicationToPorts[app][proto].extend(ports)
+        for app, entry in (data.get("applications") or {}).items():
+            mode, payload = self._extractMode(entry)
+            # payload should be {proto: [ports]}
+            portsMap = {proto.lower(): list(ports)
+                        for proto, ports in (payload or {}).items()}
+
+            exists = app in self.applicationToPorts
+
+            def create():
+                self.applicationToPorts[app] = portsMap
+
+            def overwrite():
+                self.applicationToPorts[app] = portsMap
+
+            def merge():
+                target = self.applicationToPorts.setdefault(app, {})
+                for proto, portList in portsMap.items():
+                    target.setdefault(proto, [])
+                    #If a port list per protocol is already defined, extend it. If not add the new protocol + ports
+                    target[proto].extend(
+                        p for p in portList if p not in target[proto]
+                    )
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Application Groups
-        for group, members in (data.get("applicationGroups") or {}).items():
-            self.appGroupByName.setdefault(group, ApplicationGroup(name=group, value = []))
-            existing = set(getattr(self.appGroupByName[group], "value", []))
-            self.appGroupByName[group].value = list(existing.union(members))
+        for group, entry in (data.get("applicationGroups") or {}).items():
+            mode, payload = self._extractMode(entry)
+            members = list(payload.get("members", []))
+
+            exists = group in self.appGroupByName
+
+            def create():
+                self.appGroupByName[group] = ApplicationGroup(
+                    name=group, value=list(members)
+                )
+
+            def overwrite():
+                self.appGroupByName[group].value = list(members)
+
+            def merge():
+                g = self.appGroupByName[group]
+                g.value = list(set(g.value or []).union(members))
+            
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Services to Ports
-        for svc, protoMap in data.get("services", {}).items():
-            self.serviceToPorts.setdefault(svc, {})
-            for proto, ports in (protoMap or {}).items():
-                proto = proto.lower()
-                self.serviceToPorts[svc].setdefault(proto, [])
-                self.serviceToPorts[svc][proto].extend(ports)
+        for svc, entry in (data.get("services") or {}).items():
+            mode, payload = self._extractMode(entry)
+            portsMap = {proto.lower(): list(ports)
+                        for proto, ports in (payload or {}).items()}
+        
+            exists = svc in self.serviceToPorts
+            
+            def create():
+                self.serviceToPorts[svc] = portsMap
+            
+            def overwrite():
+                self.serviceToPorts[svc] = portsMap
+
+            def merge():
+                target = self.serviceToPorts.setdefault(svc, {})
+                for proto, portList in portsMap.items():
+                    target.setdefault(proto, [])
+                    target[proto].extend(p for p in portList if p not in target[proto])
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
         
         # ----- Address Objects
-        for name, cidr in (data.get("addressObjects") or {}).items():
-            if name not in self.addressObjectByName:
+        for name, entry in (data.get("addressObjects") or {}).items():
+            mode, payload = self._extractMode(entry)
+            
+            #payload -> cidr string
+            if isinstance(payload, dict):
+                cidr = payload.get("value")
+            else:
+                cidr = payload
+            
+            #check if address object already exists
+            exists = name in self.addressObjectByName
+
+            def create():
                 self.addressObjectByName[name] = AddressObject(name=name, value=cidr)
-                try:
-                    net = ipaddress.ip_network(cidr, strict=False)
-                    self._nets.append((net, name))
-                except ValueError:
-                    _LOG.warning("Invalid CIDR '%s' for address object '%s'", cidr, name)
-                    pass
+                self._addToNets(name, cidr)
+            
+            def overwrite():
+                self.addressObjectByName[name].value = cidr
+                self._addToNets(name, cidr, replace=True)
+            
+            def merge():
+                #address objects have a single value, so merging = no operation
+                pass
+        
+            self._applyByMode(mode, exists, merge, overwrite, create)
 
         # ----- Address Groups
-        for group, members in (data.get("addressGroups") or {}).items():
-            ag = self.addressGroupByName.setdefault(group, AddressGroup(name=group, static_value=[]))
-            ag.static_value = list(set(ag.static_value or []).union(members))
-            for m in members:
-                self._addrToGroup.setdefault(m, []).append(group)
+        for group, entry in (data.get("addressGroups") or {}).items():
+            mode, payload = self._extractMode(entry)
+            members = list(payload.get("members", [])) if isinstance(payload, dict) else payload
+            
+            exists = group in self.addressGroupByName
 
-        # ----- VLAN / Zone 
-        for key, vlanMap in (data.get("vlans") or {}).items():
-            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
-            self.vlanData[key]["vlanMap"].update(vlanMap)
+            def create():
+                self.addressGroupByName[group] = AddressGroup(
+                    name=group, static_value=list(members)
+                )
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
 
-        for key, zones in (data.get("zones") or {}).items():
-            self.vlanData.setdefault(key, {"vlanMap": {}, "zones": []})
-            self.vlanData[key]["zones"].extend(z for z in zones if z not in self.vlanData[key]["zones"])
+            def overwrite():
+                self.addressGroupByName[group].static_value = list(members)
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
+
+            def merge():
+                ag = self.addressGroupByName[group]
+                ag.static_value = list(set(ag.static_value or []).union(members))
+                for m in members:
+                    self._addrToGroup.setdefault(m, []).append(group)
+
+            self._applyByMode(mode, exists, merge, overwrite, create)
+
+        # ----- VLANs  
+        for templateKey, vlanMap in data.get("vlans", {}).items():
+            self.vlanData.setdefault(templateKey, {"vlanMap": {}, "zones": []})
+
+            for vlanID, entry in vlanMap.items():
+                mode, payload = self._extractMode(entry)
+                cidr = payload if isinstance(payload, str) else payload.get("value")
+
+                exists = vlanID in self.vlanData[templateKey]["vlanMap"]
+
+                def create():
+                    self.vlanData[templateKey]["vlanMap"][vlanID] = cidr
+
+                def overwrite():
+                    self.vlanData[templateKey]["vlanMap"][vlanID] = cidr
+
+                def merge():
+                    #Vlans have a single value, so merging = no operation
+                    pass
+
+                self._applyByMode(
+                    mode, exists, merge, overwrite, create
+                )
+
+        # ----- Zones
+        for templateKey, entry in data.get("zones", {}).items():
+            mode, payload = self._extractMode(entry)
+            newZones = list(payload.get("members", [])) if isinstance(payload, dict) else list(entry)
+
+            self.vlanData.setdefault(templateKey, {"vlanMap": {}, "zones":[]})
+            exists = bool(self.vlanData[templateKey]["zones"])
+
+            def create():
+                self.vlanData[templateKey]["zones"].extend(newZones)
+
+            def overwrite():
+                self.vlanData[templateKey]["zones"] = list(newZones)
+
+            def merge():
+                prevZones = self.vlanData[templateKey]["zones"]
+                prevZones.extend(z for z in newZones if z not in prevZones)
+
+            self._applyByMode(
+                mode, exists, merge, overwrite, create
+            )
 
         _LOG.info("Static overrides from %s merged", path)
+
+    def _addToNets(self, name: str, cidr: str, *, replace: bool = False) -> None:
+        """
+        Keep self._nets [(ip_network, objName), …] in sync with addressObjects.
+
+        • replace=True → delete any old tuple for `name` before appending new one
+        • silently ignores invalid CIDRs (already logged upstream)
+        """
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            return
+
+        if replace:
+            self._nets[:] = [t for t in self._nets if t[1] != name]
+
+        self._nets.append((net, name))
+
+    def _extractMode(self, blob, default="merge"):
+        """
+        Returns (mode, payload_dict)
+        Extracts the '_mode' from a single staticOverrides object entry and returns it with the rest of the payload.
+        • blob can be a scalar, list, or mapping.
+        • If it's a mapping and contains '_mode', pop it.
+        • Everything else is returned as payload.
+        """
+        if isinstance(blob, dict) and "_mode" in blob:
+            mode = str(blob.pop("_mode")).lower()
+        else:
+            mode = default
+        return mode, blob
+
+    def _applyByMode(
+            self,
+            mode: str, 
+            exists: bool,
+            mergeFn: callable,
+            overwriteFn: callable,
+            createFn: callable,
+    ):
+        """
+        Dispatch convenience for static overrides.
+
+        • mode       - 'merge' | 'overwrite' | 'if_nonexistent'
+        • exists     - does an object of that name already exist?
+        • mergeFn    - called when mode=='merge'  and exists
+        • overwriteFn- called when mode=='overwrite' and exists
+        • createFn   - called when object needs to be created
+        """
+        if exists:
+            if mode == "overwrite":
+                overwriteFn()
+            elif mode == "merge":
+                mergeFn()
+        else:
+            createFn()
 
     # -------------- Additional Metrics for Elasticsearch ----------
     def calcRuleWeight(self, doc: dict) -> int:
