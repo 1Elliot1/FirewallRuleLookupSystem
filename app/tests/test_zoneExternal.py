@@ -1,0 +1,1 @@
+# isExternal / _cidrIsExternal logic

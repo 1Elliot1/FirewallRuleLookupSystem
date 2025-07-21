@@ -1,0 +1,1 @@
+# _get_rule_metrics (uses heavy mocking)

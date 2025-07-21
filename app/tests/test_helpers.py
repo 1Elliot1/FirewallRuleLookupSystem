@@ -1,0 +1,1 @@
+# pure functions, no Panorama needed
