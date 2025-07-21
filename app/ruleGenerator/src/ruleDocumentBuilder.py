@@ -68,6 +68,15 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                     panData, _normalizeToList(getattr(rule, "destination", []))
                 )
 
+                # ---------------- EXT/INT Flags -----------------------------
+                srcIsExternal = panData.isExternal(srcCidrs, srcGroups, srcZones)
+                destIsExternal = panData.isExternal(destCidrs, destGroups, destZones)
+
+                if srcIsExternal and "EXT-INTERNET" not in srcGroups:
+                    srcGroups.append("EXT-INTERNET")
+                if destIsExternal and "EXT-INTERNET" not in destGroups:
+                    destGroups.append("EXT-INTERNET")
+
                 # ---------------- Applications / Services / Ports -----------
                 rawApps: List[str] = _normalizeToList(getattr(rule, "application", []))
                 rawServices: List[str] = _normalizeToList(getattr(rule, "service", []))
@@ -94,7 +103,8 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                         "address": {
                             "objects": srcObjects,
                             "groups": srcGroups,
-                            "cidr": srcCidrs
+                            "cidr": srcCidrs,
+                            "isExternal": srcIsExternal
                         },
                     },
                     "destination": {
@@ -102,7 +112,8 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                         "address": {
                             "objects": destObjects,
                             "groups": destGroups,
-                            "cidr": destCidrs
+                            "cidr": destCidrs,
+                            "isExternal": destIsExternal
                         },
                     },
 

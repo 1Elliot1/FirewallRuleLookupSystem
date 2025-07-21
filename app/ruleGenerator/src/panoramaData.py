@@ -31,8 +31,6 @@ from pathlib import Path
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
     PreRulebase,
-    #PostRulebase,
-    RulebaseHitCount,
     SecurityRule,
     NatRule,
     ApplicationOverride,
@@ -44,7 +42,6 @@ from panos.policies import (
 from panos.network import (
     AggregateInterface,
     Layer3Subinterface,
-    #Vlan,
     Zone,
 )
 from panos.device import Vsys
@@ -75,10 +72,7 @@ RULE_TYPES = (
     AuthenticationRule,
 )
 
-#RULEBASE_CLASSES = (PreRulebase, Rulebase, PostRulebase)
-
 #lru_cache to speed up repeated lookups
-#TODO: Look into the lru_cache decorator to see how it works/what it exactly does
 @lru_cache(maxsize=None)
 def _ip_in_cidr(ip: str, cidr: str) -> bool:
     """Fast *utility* used by higher‑level correlation helpers."""
@@ -161,12 +155,6 @@ class PanoramaData:
 
         self._applyStaticOverrides()
 
-        #TEST LINES:
-        logging.info(self.serviceToPorts["exampleService"]["tcp"] == ["8080", "8443"])
-        logging.info("exampleApp0" in self.appGroupByName["exampleAppGroup"].value)
-        logging.info(self.addressGroupByName["exampleAddressGroup"].static_value)
-        logging.info(self.vlanData["IC-datacenter-template-vsys1"]["vlanMap"]["8008"] == "123.123.123.0/26")
-
     # ------------------------------------------------------------------
     #  Inventory Private Methods
     # ------------------------------------------------------------------
@@ -240,8 +228,6 @@ class PanoramaData:
         self._predefinedContainerLeaves = leaves
     
     def _expandPredefContainer(self, name: str) -> list[str]:
-        #Check XML API Cache for pre-defined container members
-        #!This returns the name of the members of a container, not the actual application objects
         return self._predefinedContainerLeaves.get(name, [])
 
     @lru_cache(maxsize=None)
@@ -252,6 +238,10 @@ class PanoramaData:
         try:
             parent = ipaddress.ip_network(parentCidr, strict=False)
         except ValueError:
+            return ()
+        
+        #Catch for when theres an object with /0 (as to not add all objects to its list)
+        if parent.prefixlen == 0:
             return ()
         
         out: list[str] = [
@@ -299,12 +289,10 @@ class PanoramaData:
 
                 vlanMap: Dict[str, str] = {}
                 for agg in aggIfaces:
-                    #TODO: Figure out if you need to handle any othercases of subinterfaces (Not layer3-- Unsure if these exist in our env)
                     for subif in agg.findall(Layer3Subinterface):
                         try:
                             #Create a mapping of VLAN numbers to their associated IP ranges
                             #!Assumes that subinterface name format is <name>.<vlanNumber>
-                            #TODO: Figure out if there is a way to handle naming conventions that do not follow this, even though it works for this env for now 
                             vlan, ipCidr = subif.name.split(".")[1], subif.ip
                             vlanMap[vlan] = ipCidr
                         except (IndexError, AttributeError):
@@ -508,8 +496,6 @@ class PanoramaData:
         self._expandedAppGroupCache[name] = deduped
         return deduped
 
-#TODO: _ExpandAppContaier function for non-predefined containers?
-
     @lru_cache(maxsize=None)
     def _expandServiceGroup(self, name: str) -> Tuple[str, ...]:
         grp = self.serviceGroupByName.get(name)
@@ -522,7 +508,6 @@ class PanoramaData:
             else:
                 leaves.add(member)
         return tuple(leaves)
-
 
     #  Port resolution helper (used by ruleDocumentBuilder)
     # ------------------------------------------------------------------
@@ -554,6 +539,11 @@ class PanoramaData:
                         reasoning.setdefault(key, []).append(
                             f"{app} (application-default)"
                         )
+
+        if serviceFieldRaw == ["any"]:
+            resolvedPorts.update({"tcp/*", "udp/*"})
+            reasoning.setdefault("tcp/*", []).append("Service Any")
+            reasoning.setdefault("udp/*", []).append("Service Any")
 
         # --- explicit service objects --------------------------------
         for svc in services:
@@ -592,6 +582,34 @@ class PanoramaData:
             _LOG.error("Failed to load static overrides from '%s': %s", path, exc)
             return
         
+        # ----- Ext/Int Internet Synth -----------------------------
+        inside = data.get("internalPrefixes", [])
+        externalCidrs = self._cidrCompliment(inside)
+        self._externalZones = {z.lower() for z in data.get("externalZones", [])}
+
+
+        self._internalNets = [
+            ipaddress.ip_network(c, strict=False)
+            for c in inside
+        ]
+        #Catch all object
+        self._ensureAddressObject("EXT-INTERNET", "0.0.0.0/0")
+
+        # On object per external CIDR (EXT-v4-<n>)
+        memberNames = []
+        for idx, cidr in enumerate(externalCidrs, 1):
+            objectName = f"EXT-{idx}"
+            self._ensureAddressObject(objectName, cidr)
+            memberNames.append(objectName)
+
+        # Create a group for EXT-Internet (adding all of the created address objects)
+        addressGroup = self.addressGroupByName.setdefault("EXT-INTERNET", AddressGroup(name="EXT-INTERNET", static_value=[]))
+        addressGroup.static_value = memberNames
+        
+        # Add the EXT-INTERNET group to the _addrToGroup mapping so searches by object show the group
+        for mem in memberNames:
+            self._addrToGroup.setdefault(mem, []).append("EXT-INTERNET")
+
         # ----- Applications to Ports
         for app, entry in (data.get("applications") or {}).items():
             mode, payload = self._extractMode(entry)
@@ -819,6 +837,83 @@ class PanoramaData:
         else:
             createFn()
 
+    # -------------- Helpers for EXT/INT Internet Synth   -----------
+    def _cidrCompliment(self, cidrs: list[str]) -> list[str]:
+        """
+        Given a list of CIDRs, return a set of CIDRs that cover everything except the input
+        """
+        v4Everything = [ipaddress.ip_network("0.0.0.0/0")]
+        v6Everything = [ipaddress.ip_network("::/0")]
+
+        for raw in cidrs: 
+            try:
+                net = ipaddress.ip_network(raw, strict=False)
+            except ValueError:
+                continue
+            everything = v4Everything if net.version == 4 else v6Everything
+            newEverything = []
+            for block in everything:
+                if net.subnet_of(block):
+                    # If the input CIDR is a subnet of the block, remove it
+                    newEverything.extend(block.address_exclude(net))
+                else: 
+                    newEverything.append(block)
+            if net.version == 4:
+                v4Everything = newEverything
+            else:
+                v6Everything = newEverything
+        
+        return [n.with_prefixlen for n in v4Everything + v6Everything if n.prefixlen != 0]
+    
+    def _ensureAddressObject(self, name: str, value: str) -> None:
+        """
+        Create an address object if absent and sync self._nets
+        """
+        if name in self.addressObjectByName:
+            return
+        self.addressObjectByName[name] = AddressObject(name=name, value=value)
+        self._addToNets(name, value)
+
+    def _zoneIsExternal(self, z: str) -> bool:
+        return z.lower() in self._externalZones
+
+    def isExternal(self, cidrList: list[str], groupList: list[str], zoneList: list[str] | None = None) -> bool:
+        """
+        Return True if any CIDR or address object/group on that rule side lies outside of internalPrefixes
+        """
+        if zoneList and "any" not in {z.lower() for z in zoneList}:
+            return any(self._zoneIsExternal(z) for z in zoneList)
+
+        if "any" in groupList or "EXT-INTERNET" in groupList:
+            return True
+
+        for c in cidrList:
+            if self._cidrIsExternal(c):
+                return True
+
+        for obj in groupList:
+            if obj.lower() == "any":
+                continue
+            ao = self.addressObjectByName.get(obj)
+            if ao and self._cidrIsExternal(ao.value):
+                return True
+
+        return False
+    
+    def _cidrIsExternal(self, cidr: str | dict) -> bool:
+        """
+        Return true of CidrStr is outside all internal prefixes
+        Accepts 0.0.0.0/24 or {'gte': '0.0.0.0', 'lte':'0.0.0.10'}
+        """
+        if cidr == "any":
+            return True
+        if isinstance(cidr, dict):
+            lo = ipaddress.ip_address(cidr["gte"])
+            hi = ipaddress.ip_address(cidr["lte"])
+            return not any(lo in net and hi in net for net in self._internalNets)
+        net = ipaddress.ip_network(cidr, strict=False)
+        return not any(net.subnet_of(internal) for internal in self._internalNets)
+
     # -------------- Additional Metrics for Elasticsearch ----------
     def calcRuleWeight(self, doc: dict) -> int:
         S = len(doc["source"]["address"]["objects"])
@@ -947,7 +1042,6 @@ class PanoramaData:
         hitCount, lastHit, created, modified.
         """
 
-
         rule_types = {
             "SecurityRule": "security",
             "NatRule": "nat",
@@ -956,7 +1050,6 @@ class PanoramaData:
             "DecryptionRule": "decryption",
             "AuthenticationRule": "authentication",
         }
-
         metrics: dict[str, dict] = {}
 
         for dg, bucket in self.deviceGroupRules.items():
