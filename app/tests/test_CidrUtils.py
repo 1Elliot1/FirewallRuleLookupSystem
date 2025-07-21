@@ -1,5 +1,5 @@
 import ipaddress
-import panoramaData as pd
+from ruleGenerator.src import panoramaData as pd
 
 PD = pd.PanoramaData()          # construct with minimal kwargs if needed
 PD._internalNets = [ipaddress.ip_network("10.0.0.0/8")]
