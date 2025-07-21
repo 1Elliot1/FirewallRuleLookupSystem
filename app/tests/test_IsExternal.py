@@ -1,4 +1,4 @@
-from ruleGenerator.src import panoramaData as pd
+from app.ruleGenerator.src import panoramaData as pd
 
 PD = pd.PanoramaData()
 PD._internalNets   = []
