@@ -117,3 +117,8 @@ def test_service_any_expands_wildcards(monkeypatch, pano_stub):
     )
     assert set(res["resolvedPorts"]) == {"tcp/*", "udp/*"}
     assert res["portReasoning"]["tcp/*"] == ["Service Any"]
+
+#! What happens if apps and services == any? Is that possible?
+#! What happens if apps == any and services == application-default? is that possible?
+#! What happens if apps == any and services == None? Is that possible?
+#! What happens if apps == None and services == None? Is that possible?
