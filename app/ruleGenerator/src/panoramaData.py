@@ -614,8 +614,10 @@ class PanoramaData:
         for app, entry in (data.get("applications") or {}).items():
             mode, payload = self._extractMode(entry)
             # payload should be {proto: [ports]}
-            portsMap = {proto.lower(): list(ports)
-                        for proto, ports in (payload or {}).items()}
+            portsMap = {
+                proto.lower(): [str(p) for p in ports]
+                for proto, ports in (payload or {}).items()
+            }
 
             exists = app in self.applicationToPorts
 
