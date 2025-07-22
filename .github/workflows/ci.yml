@@ -1,13 +1,43 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
-      - run: pip install pytest pytest-cov ruff mypy pyyaml pan-os-python
-      - run: pytest
-      - run: ruff check .
-      - run: mypy panoramaData.py ruleDocumentBuilder.py
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    # -------------------------------------------
+    # Put app/ on PYTHONPATH so "ruleGenerator…" resolves
+    - name: Set PYTHONPATH
+      run: echo "PYTHONPATH=$GITHUB_WORKSPACE/app" >> $GITHUB_ENV
+
+    # -------------------------------------------
+    # Install runtime + dev deps
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pan-os-python
+        python -m pip install pytest pytest-cov ruff mypy pyyaml
+
+    # -------------------------------------------
+    # Unit tests
+    - name: Run pytest
+      run: |
+        pytest -q --cov=app --cov-report=xml
+
+    # -------------------------------------------
+    # Lint & type-check
+    - name: Ruff
+      run: ruff check app
+
+    - name: MyPy
+      run: mypy app/ruleGenerator/src
