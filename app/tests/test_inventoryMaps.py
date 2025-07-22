@@ -160,13 +160,11 @@ def test_buildFastMaps_scalability(monkeypatch, pano_stub):
     # spot-check a few
     assert pdata.addressObjectByName["N0"].value == "10.0.0.0/24"
     assert pdata.addressObjectByName["N1999"].value == "10.7.207.0/24"
-    
+
     # maps and nets have same length (invalid CIDRs would shrink them)
     nets_names = {name for _, name in pdata._nets}
 
-    # 1) The cache grew (static-override objects got added) …
     assert len(pdata._nets) >= len(pdata.addressObjects)
 
-    # 2) … but it still contains *all* 2 000 of the objects we created.
     for ao in big_list:
         assert ao.name in nets_names

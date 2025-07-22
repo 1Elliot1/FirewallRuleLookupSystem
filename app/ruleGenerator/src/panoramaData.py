@@ -334,6 +334,7 @@ class PanoramaData:
                             for p in range (low, high + 1):
                                 ports[proto].append(str(p))
                                 portToEntities[f"{proto}/{p}"]["applications"].append(app.name)
+                            continue
                         ports[proto].append(part)
                         portToEntities[f"{proto}/{part}"]["applications"].append(app.name)
                 except ValueError:
