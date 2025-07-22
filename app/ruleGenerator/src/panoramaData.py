@@ -912,7 +912,10 @@ class PanoramaData:
             hi = ipaddress.ip_address(cidr["lte"])
             return not any(lo in net and hi in net for net in self._internalNets)
         net = ipaddress.ip_network(cidr, strict=False)
-        return not any(net.subnet_of(internal) for internal in self._internalNets)
+        return not any(
+            net.version == internal.version and net.subnet_of(internal)
+            for internal in self._internalNets
+        )
 
     # -------------- Additional Metrics for Elasticsearch ----------
     def calcRuleWeight(self, doc: dict) -> int:
