@@ -325,7 +325,6 @@ class PanoramaData:
                     proto = proto.lower()
                     if proto not in {"tcp", "udp", "icmp"}:
                         continue
-
                     for part in blob.split(","):
                         part = part.strip()
                         #Support for port ranges (e.g. "80-90")
@@ -530,7 +529,7 @@ class PanoramaData:
         reasoning: Dict[str, List[str]] = {}
 
         # --- application-default -------------------------------------
-        if serviceFieldRaw == ["application-default"]:
+        if "application-default" in serviceFieldRaw:
             for app in apps:
                 portMap = self.applicationToPorts.get(app, {})
                 for proto, portList in portMap.items():
