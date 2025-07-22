@@ -1101,18 +1101,21 @@ class PanoramaData:
             cr = dv.findtext("rule-creation-timestamp")
             mo = dv.findtext("rule-modification-timestamp")
 
-            for tag, val in [("lh", lh), ("fh", fh), ("cr", cr), ("mo", mo)]:
-                if val and not val.isdigit():
-                    val = None
-            
-            if lh and(lastHit is None or int(lh) > lastHit):
-                lastHit = int(lh)
-            if fh and(firstHit is None or int(fh) < firstHit):
-                firstHit = int(fh)
-            if cr and(created is None or int(cr) < created):
-                created = int(cr)
-            if mo and(modified is None or int(mo) > modified):
-                modified = int(mo)
+            # ---- sanitize ----------------------------------------------------
+            def safe_int(s):                     # local helper
+                return int(s) if s and s.isdigit() else None
+
+            lh, fh, cr, mo = map(safe_int, (lh, fh, cr, mo))
+
+            # ---- update aggregates ------------------------------------------
+            if lh is not None and (lastHit is None or lh > lastHit):
+                lastHit = lh
+            if fh is not None and (firstHit is None or fh < firstHit):
+                firstHit = fh
+            if cr is not None and (created is None or cr < created):
+                created = cr
+            if mo is not None and (modified is None or mo > modified):
+                modified = mo
 
         return { 
             "hitCount": hitSum,
