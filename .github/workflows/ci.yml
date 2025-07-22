@@ -31,8 +31,7 @@ jobs:
     # -------------------------------------------
     # Unit tests
     - name: Run pytest
-      run: |
-        pytest -q --cov=app --cov-report=xml
+      run: pytest --cov=app --cov-report=xml
 
     # -------------------------------------------
     # Lint & type-check
