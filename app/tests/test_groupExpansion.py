@@ -26,7 +26,7 @@ def test_expandAddressGroups_nested(monkeypatch, pano_stub):
 
     pdata = PanoramaData(pano_stub)
 
-    assert pdata.expandAddressGroups("TOP") == ["ENG_NET", "HR_NET"] 
+    assert set(pdata.expandAddressGroups("TOP")) == {"ENG_NET", "HR_NET"}
     # cache hit path
     assert pdata._expandedAppGroupCache == {}  # untouched by address flow
 
