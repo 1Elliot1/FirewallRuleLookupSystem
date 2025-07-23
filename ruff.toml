@@ -2,7 +2,7 @@
 
 # Lint rules we want in general
 select = ["E", "F"]
-line-length  = 150
+line-length  = 240
 
 # File-specific ignores
 [per-file-ignores]
