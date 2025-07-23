@@ -325,7 +325,6 @@ class PanoramaData:
                     proto = proto.lower()
                     if proto not in {"tcp", "udp", "icmp"}:
                         continue
-
                     for part in blob.split(","):
                         part = part.strip()
                         #Support for port ranges (e.g. "80-90")
@@ -334,6 +333,7 @@ class PanoramaData:
                             for p in range (low, high + 1):
                                 ports[proto].append(str(p))
                                 portToEntities[f"{proto}/{p}"]["applications"].append(app.name)
+                            continue
                         ports[proto].append(part)
                         portToEntities[f"{proto}/{part}"]["applications"].append(app.name)
                 except ValueError:
@@ -529,7 +529,7 @@ class PanoramaData:
         reasoning: Dict[str, List[str]] = {}
 
         # --- application-default -------------------------------------
-        if serviceFieldRaw == ["application-default"]:
+        if "application-default" in serviceFieldRaw:
             for app in apps:
                 portMap = self.applicationToPorts.get(app, {})
                 for proto, portList in portMap.items():
@@ -614,8 +614,10 @@ class PanoramaData:
         for app, entry in (data.get("applications") or {}).items():
             mode, payload = self._extractMode(entry)
             # payload should be {proto: [ports]}
-            portsMap = {proto.lower(): list(ports)
-                        for proto, ports in (payload or {}).items()}
+            portsMap = {
+                proto.lower(): [str(p) for p in ports]
+                for proto, ports in (payload or {}).items()
+            }
 
             exists = app in self.applicationToPorts
 
@@ -912,7 +914,10 @@ class PanoramaData:
             hi = ipaddress.ip_address(cidr["lte"])
             return not any(lo in net and hi in net for net in self._internalNets)
         net = ipaddress.ip_network(cidr, strict=False)
-        return not any(net.subnet_of(internal) for internal in self._internalNets)
+        return not any(
+            net.version == internal.version and net.subnet_of(internal)
+            for internal in self._internalNets
+        )
 
     # -------------- Additional Metrics for Elasticsearch ----------
     def calcRuleWeight(self, doc: dict) -> int:
@@ -1070,7 +1075,6 @@ class PanoramaData:
     def _get_rule_metrics(self, dg: str, rt: str, rn: str) -> dict | None:
 
         import xml.etree.ElementTree as ET
-        import xml.dom.minidom as minidom
         cmd = f"<show><rule-hit-count><device-group><entry name='{dg}'><pre-rulebase><entry name='{rt}'><rules><rule-name><entry name='{rn}'/></rule-name></rules></entry></pre-rulebase></entry></device-group></rule-hit-count></show>"
         try: 
             xmlAnswer = self.pano.op(cmd=cmd, cmd_xml=False)
@@ -1096,18 +1100,21 @@ class PanoramaData:
             cr = dv.findtext("rule-creation-timestamp")
             mo = dv.findtext("rule-modification-timestamp")
 
-            for tag, val in [("lh", lh), ("fh", fh), ("cr", cr), ("mo", mo)]:
-                if val and not val.isdigit():
-                    val = None
-            
-            if lh and(lastHit is None or int(lh) > lastHit):
-                lastHit = int(lh)
-            if fh and(firstHit is None or int(fh) < firstHit):
-                firstHit = int(fh)
-            if cr and(created is None or int(cr) < created):
-                created = int(cr)
-            if mo and(modified is None or int(mo) > modified):
-                modified = int(mo)
+            # ---- sanitize ----------------------------------------------------
+            def safe_int(s):                     # local helper
+                return int(s) if s and s.isdigit() else None
+
+            lh, fh, cr, mo = map(safe_int, (lh, fh, cr, mo))
+
+            # ---- update aggregates ------------------------------------------
+            if lh is not None and (lastHit is None or lh > lastHit):
+                lastHit = lh
+            if fh is not None and (firstHit is None or fh < firstHit):
+                firstHit = fh
+            if cr is not None and (created is None or cr < created):
+                created = cr
+            if mo is not None and (modified is None or mo > modified):
+                modified = mo
 
         return { 
             "hitCount": hitSum,

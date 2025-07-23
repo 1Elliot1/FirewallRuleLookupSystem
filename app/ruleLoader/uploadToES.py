@@ -4,7 +4,14 @@ File watcher version of uploadToES.py
 Watches for new ruleMetrics-*.ndjson files and uploads them automatically
 """
 from __future__ import annotations
-import argparse, json, os, sys, time, pathlib, requests, tqdm
+import argparse
+import json
+import os
+import sys
+import time
+import pathlib
+import requests
+import tqdm
 from datetime import datetime
 import threading
 from watchdog.observers import Observer
@@ -192,8 +199,8 @@ if __name__ == "__main__":
             # Delete existing indices if requested
             try:
                 r = requests.delete(f"{ES_HOST}/{prefix}-*", headers=esHeaders())
-                print(f"🗑️  Cleaned up old indices")
-            except:
-                pass
+                print("🗑️  Cleaned up old indices")
+            except Exception as e:
+                print(f"⚠️  Failed to delete old indices: {e}")
 
         processLatestFile()

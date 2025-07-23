@@ -2,10 +2,11 @@
 
 import argparse
 from datetime import datetime
-import json, os, pathlib
+import json
+import os
+import pathlib
 import sys
 from panos.panorama import Panorama
-from pathlib import Path
 from dotenv import load_dotenv
 from panoramaData import PanoramaData
 from ruleDocumentBuilder import buildRuleDocuments
