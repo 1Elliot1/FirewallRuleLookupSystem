@@ -54,6 +54,12 @@ def test_build_rule_documents_golden(pdata):
     }
     pdata.ruleMetrics = {}   # hit‑count optional for this test
 
+    # PanoramaData sets `_externalZones` only when staticOverrides.yml is
+    # present.  In the stub inventory we skip that file, so make sure the
+    # attribute exists to avoid AttributeError inside `isExternal()`.
+    if not hasattr(pdata, "_externalZones"):
+        pdata._externalZones = set()
+
     # 2) Act ---------------------------------------------------------------
     docs = buildRuleDocuments(pdata)
 
