@@ -1,10 +1,8 @@
-# ruff.toml  (repo root)
+# repo-root/ruff.toml
 
-[tool.ruff]
-select = ["E", "F"]         # keep all the usual lint rules
+# Lint rules we want in general
+select = ["E", "F"]
 
-[tool.ruff.per-file-ignores]
-# Globs are relative to the repo root.
-# Here we silence lambda-assign (E731) and unused-import (F401)
-# only for any file under app/tests/
-"app/tests/*.py" = ["E731", "F401"]
+# File-specific ignores
+[per-file-ignores]
+"app/tests/*.py" = ["E731", "F401"]   # silence lambda-assign & unused-import in tests
