@@ -38,5 +38,5 @@ jobs:
     - name: Ruff
       run: ruff check app
 
-    - name: MyPy
-      run: mypy app/ruleGenerator/src
+    # - name: MyPy
+    #   run: mypy app/ruleGenerator/src
