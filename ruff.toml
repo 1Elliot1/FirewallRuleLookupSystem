@@ -5,4 +5,4 @@ select = ["E", "F"]
 
 # File-specific ignores
 [per-file-ignores]
-"app/tests/*.py" = ["E731", "F401"]   # silence lambda-assign & unused-import in tests
+"app/tests/*.py" = ["E731", "F401", "E501"]   # silence lambda-assign & unused-import in tests
