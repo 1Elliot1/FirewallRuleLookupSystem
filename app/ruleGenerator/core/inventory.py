@@ -27,8 +27,6 @@ from collections import defaultdict
 from functools import lru_cache
 from typing import Dict, List, Set, Tuple
 
-from pathlib import Path
-
 # pan‑os‑python ------------------------------------------------------------
 from panos.panorama import Panorama, DeviceGroup, Template
 from panos.policies import (
