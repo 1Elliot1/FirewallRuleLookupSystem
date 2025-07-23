@@ -17,11 +17,11 @@ Call it after buildApplicationPortMap() so that all of the helper mappings are d
 
 from __future__ import annotations
 
-import logging
 from typing import List, Dict, Tuple, Set
 from datetime import datetime, timezone
 from panoramaData import PanoramaData
-import ipaddress, re
+import ipaddress
+import re
 
 PROTOCOL_TO_BYTE = {
         "tcp": 6,

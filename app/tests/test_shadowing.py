@@ -14,7 +14,6 @@ emits) to hit the key branches:
     4. Earlier rule uses 'any' joker ⇒ shadows
 """
 
-from types import SimpleNamespace
 import pytest
 from ruleGenerator.src.panoramaData import PanoramaData
 

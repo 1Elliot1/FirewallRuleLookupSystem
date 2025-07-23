@@ -21,9 +21,7 @@ Formula (from source code):
         weight += 24
 """
 
-import math
 from ruleGenerator.src.panoramaData import PanoramaData
-from types import SimpleNamespace
 import pytest
 
 

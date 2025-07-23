@@ -1,9 +1,8 @@
 # address/app/service expansion helpers
 # tests/test_group_expansion.py
 from types import SimpleNamespace
-import pytest
 from ruleGenerator.src.panoramaData import PanoramaData
-from tests.conftest import AO, AG, SV
+from tests.conftest import AO, AG
 
 # AO, AG, SV helpers from conftest or redefine locally as needed
 

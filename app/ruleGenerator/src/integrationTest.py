@@ -15,7 +15,7 @@ import json
 import os
 import pathlib
 import statistics
-from collections import Counter, defaultdict
+from collections import Counter
 
 from panos.panorama import Panorama
 from panoramaData import PanoramaData

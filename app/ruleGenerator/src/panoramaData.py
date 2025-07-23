@@ -1075,7 +1075,6 @@ class PanoramaData:
     def _get_rule_metrics(self, dg: str, rt: str, rn: str) -> dict | None:
 
         import xml.etree.ElementTree as ET
-        import xml.dom.minidom as minidom
         cmd = f"<show><rule-hit-count><device-group><entry name='{dg}'><pre-rulebase><entry name='{rt}'><rules><rule-name><entry name='{rn}'/></rule-name></rules></entry></pre-rulebase></entry></device-group></rule-hit-count></show>"
         try: 
             xmlAnswer = self.pano.op(cmd=cmd, cmd_xml=False)

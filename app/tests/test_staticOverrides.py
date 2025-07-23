@@ -13,9 +13,7 @@ same _applyByMode dispatcher:
 
 from types import SimpleNamespace
 import textwrap
-import yaml
 import pytest
-import ipaddress
 from ruleGenerator.src.panoramaData import PanoramaData
 
 

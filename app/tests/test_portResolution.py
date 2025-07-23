@@ -14,8 +14,6 @@ Scenarios:
 """
 
 from types import SimpleNamespace
-import pytest
-from tests.conftest import AO, AG, SV          # helpers from shared conftest
 from ruleGenerator.src.panoramaData import PanoramaData
 
 

@@ -1,7 +1,6 @@
 # tests/conftest.py
 import pytest
 from types import SimpleNamespace
-import ruleGenerator.src.panoramaData as pano_mod
 from ruleGenerator.src.panoramaData import PanoramaData
 
 # Helpers to create tiny stand-in objects

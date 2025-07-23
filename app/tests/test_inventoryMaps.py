@@ -11,7 +11,6 @@ Relies on fixtures from tests/conftest.py:
 
 from types import SimpleNamespace
 import ipaddress
-import pytest
 from ruleGenerator.src.panoramaData import PanoramaData
 
 
