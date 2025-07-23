@@ -41,6 +41,7 @@ def pano_stub(monkeypatch):
     
     # ---- Predefined stub ----------------------------------------
     monkeypatch.setattr("ruleGenerator.src.panoramaData.Predefined", StubPredefined)
+    monkeypatch.setattr("ruleGenerator.core.inventory.Predefined", StubPredefined)  # <- add this line
 
     # ---- default refreshall() returns ---------------------------
     monkeypatch.setattr("ruleGenerator.src.panoramaData.AddressObject.refreshall",
