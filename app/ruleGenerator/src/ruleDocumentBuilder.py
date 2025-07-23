@@ -278,8 +278,6 @@ def _expandAddressReferences(
 
     return list(objects), list(groups), list(cidrs)
 
-import re
-
 _RANGE_RE = re.compile(r"\s*([0-9a-fA-F.:]+)\s*-\s*([0-9a-fA-F.:]+)\s*")
 
 def _as_ip_range(token: str) -> str | dict | None:

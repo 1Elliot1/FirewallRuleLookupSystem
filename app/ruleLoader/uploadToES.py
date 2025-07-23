@@ -200,7 +200,7 @@ if __name__ == "__main__":
             try:
                 r = requests.delete(f"{ES_HOST}/{prefix}-*", headers=esHeaders())
                 print("🗑️  Cleaned up old indices")
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️  Failed to delete old indices: {e}")
 
         processLatestFile()

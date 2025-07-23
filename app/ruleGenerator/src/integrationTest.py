@@ -16,6 +16,7 @@ import os
 import pathlib
 import statistics
 from collections import Counter
+from dotenv import load_dotenv
 
 from panos.panorama import Panorama
 from panoramaData import PanoramaData
@@ -26,7 +27,6 @@ OUT_DIR     = pathlib.Path("out")
 OUT_DIR.mkdir(exist_ok=True)
 
 # ── 1. Pull + flatten ──────────────────────────────────────────────────────
-from dotenv import load_dotenv
 load_dotenv()
 
 pan_addr = os.getenv("PAN_ADDRESS")
