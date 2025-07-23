@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import List, Dict, Tuple, Set
 from datetime import datetime, timezone
-from panoramaData import PanoramaData
+from .panoramaData import PanoramaData
 import ipaddress
 import re
 

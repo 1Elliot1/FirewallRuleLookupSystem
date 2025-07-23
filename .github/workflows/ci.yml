@@ -38,5 +38,9 @@ jobs:
     - name: Ruff
       run: ruff check app
 
+    # Test to avoid coverage regression
+    - name: Test with coverage
+      run: |
+        pytest --cov=ruleGenerator --cov-report=xml --cov-fail-under=80
     # - name: MyPy
     #   run: mypy app/ruleGenerator/src
