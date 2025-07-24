@@ -6,6 +6,9 @@ from .metrics import (
     calc_rule_weight,
     is_shadowed,
 )
+from ruleGenerator.core.inventory import ip_in_cidr as _ip_in_cidr 
+
+ip_in_cidr = _ip_in_cidr 
 
 __all__ = [
     "PanoramaInventory",
@@ -16,4 +19,5 @@ __all__ = [
     "RuleMetricsCollector",
     "calc_rule_weight",
     "is_shadowed",
+    "_ip_in_cidr",
 ]

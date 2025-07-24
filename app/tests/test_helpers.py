@@ -3,8 +3,9 @@
 # tests/test_helpers.py
 import pytest
 import ipaddress
-from ruleGenerator.src.panoramaData import _ip_in_cidr, PanoramaData
-
+from ruleGenerator.core.inventory import ip_in_cidr as _ip_in_cidr
+from ruleGenerator.core.metrics import _subset, _cidrs_cover
+from ruleGenerator.core.overrides import _cidr_complement
 
 # ---------------------------------------------------------------------------
 # _ip_in_cidr  ───────────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ def test_ip_in_cidr(ip, cidr, expected):
     ],
 )
 def test_subset(needle, haystack, expected):
-    assert PanoramaData._subset(needle, haystack) is expected
+    assert _subset(needle, haystack) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ RNG  = lambda lo, hi: {"gte": lo, "lte": hi}
     ],
 )
 def test_cidrs_cover(child, parent, expected):
-    assert PanoramaData._cidrs_cover(child, parent) is expected
+    assert _cidrs_cover(child, parent) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ def test_cidrs_cover(child, parent, expected):
 
 # --- _subset : empty haystack ------------------------------------------------
 def test_subset_empty_haystack():
-    assert PanoramaData._subset(["a"], []) is False
+    assert _subset(["a"], []) is False
 
 
 # --- _ip_in_cidr : version mismatch ------------------------------------------
@@ -119,19 +120,20 @@ def test_ip_in_cidr_version_mismatch(ip, cidr):
 
 
 # --- _cidrCompliment ---------------------------------------------------------
-def test_cidr_compliment_simple_halves():
+
+def test_cidr_complement_simple_halves():
     # "0.0.0.0/1" is the lower half; complement should be the upper half
-    comp = PanoramaData._cidrCompliment(None, ["0.0.0.0/1"])
+    comp = _cidr_complement(["0.0.0.0/1"])
     assert comp == ["128.0.0.0/1"]
 
     # IPv6 analogue
-    comp6 = PanoramaData._cidrCompliment(None, ["::/1"])
+    comp6 = _cidr_complement(["::/1"])
     assert comp6 == ["8000::/1"]
 
 
-def test_cidr_compliment_excludes_originals():
+def test_cidr_complement_excludes_originals():
     internal = ["10.0.0.0/8"]
-    comp = PanoramaData._cidrCompliment(None, internal)
+    comp = _cidr_complement(internal)
 
     # No overlap between internal net and any complement net
     internal_net = ipaddress.ip_network("10.0.0.0/8")

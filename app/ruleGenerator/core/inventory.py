@@ -342,6 +342,87 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
             for net, name in self._nets
             if net.version == parent.version and net != parent and net.subnet_of(parent)
         )
+    # ----------------------------------------------------------------
+    #  Application / service group helpers
+    # ----------------------------------------------------------------
+
+    def expand_applications(self, candidates: List[str]) -> List[str]:
+        """Return the list of *leaf* applications after group/container
+        expansion (keeps 'application-default' untouched)."""
+        resolved: List[str] = []
+        for app in candidates:
+            if app == "application-default":
+                resolved.append(app)
+            elif app in self.leafAppNames:
+                resolved.append(app)
+            elif app in self.appGroupByName:
+                resolved.extend(self._expand_app_group(app))
+            elif app in self.predefContainerByName:
+                resolved.extend(self.expand_predef_container(app))
+            else:
+                resolved.append(app)
+        # preserve order, deduplicate
+        return list(dict.fromkeys(resolved))
+
+    def expand_services(self, svcs: List[str]) -> List[str]:
+        resolved: Set[str] = set()
+        for svc in svcs:
+            if svc in self.serviceGroupByName:
+                resolved.update(self._expand_service_group(svc))
+            else:
+                resolved.add(svc)
+        return list(resolved)
+
+    # ---- private, cached recursion helpers ------------------------
+
+    def _expand_app_group(self, name: str) -> List[str]:
+        cache = self._expandedAppGroupCache
+        if name in cache:
+            return cache[name]
+
+        grp = self.appGroupByName.get(name)
+        if not grp:
+            return [name]
+
+        leaves: List[str] = []
+        for member in getattr(grp, "value", []):
+            if member in self.appGroupByName:
+                leaves.extend(self._expand_app_group(member))
+            elif member in self.predefContainerByName:
+                leaves.extend(self.expand_predef_container(member))
+            else:
+                leaves.append(member)
+
+        deduped = list(dict.fromkeys(leaves))
+        cache[name] = deduped
+        return deduped
+
+    from functools import lru_cache as _lru  # local alias
+
+    @_lru(maxsize=None)
+    def _expand_service_group(self, name: str) -> Tuple[str, ...]:
+        grp = self.serviceGroupByName.get(name)
+        if not grp:
+            return (name,)
+
+        leaves: Set[str] = set()
+        for member in getattr(grp, "value", []):
+            if member in self.serviceGroupByName:
+                leaves.update(self._expand_service_group(member))
+            else:
+                leaves.add(member)
+        return tuple(leaves)
+
+    # ----------------------------------------------------------------
+    #  Convenience combo helper used by rule builders
+    # ----------------------------------------------------------------
+    def resolve_app_and_service_groups(
+        self, apps: List[str] | None, services: List[str] | None
+    ) -> Tuple[List[str], List[str]]:
+        return (
+            self.expand_applications(apps or []),
+            self.expand_services(services or []),
+        )
 
 
 # ---------------------------------------------------------------------------
