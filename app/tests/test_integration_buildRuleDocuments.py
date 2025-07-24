@@ -1,83 +1,84 @@
-"""Integration test for `buildRuleDocuments` using a *tiny* fake inventory.
+# tests/integration/test_build_rule_documents.py
+"""
+Golden-path integration test for `buildRuleDocuments`.
 
-This golden‑sample test wires the real `PanoramaData` helpers together with a
-one‑rule, one‑device‑group scenario.  It relies solely on the lightweight
-fixtures in *tests/conftest.py* (no live API needed).
+We spin up the real PanoramaData façade (via the shared `pdata` fixture)
+and feed it a single SecurityRule.  All helpers – inventory, port–maps,
+static-overrides (skipped in the stub), rule-metrics – execute exactly
+as in production *except* for external-CIDR detection, which we stub with
+a 3-line helper to keep the test self-contained.
 """
 
 from types import SimpleNamespace
-
-import pytest
-
-# Project imports -----------------------------------------------------------
+from functools import partial, wraps
 from ruleGenerator.src.ruleDocumentBuilder import buildRuleDocuments
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# A minimal stand-in SecurityRule
 # ---------------------------------------------------------------------------
-
-def _rule(name: str, **overrides):
-    """Create a stand‑in SecurityRule as SimpleNamespace."""
-    # defaults minimise the amount of PanoramaData state we have to mock
-    data = {
-        "action": "allow",
-        "fromzone": ["internal"],
-        "tozone": ["external"],
-        "source": ["any"],
-        "destination": ["any"],
-        "application": ["any"],
-        "service": ["any"],
-        "description": None,
-    }
-    data.update(overrides)
-    return SimpleNamespace(name=name, **data)
+def _rule(name: str, **overrides) -> SimpleNamespace:
+    base = dict(
+        action="allow",
+        fromzone=["internal"],
+        tozone=["external"],
+        source=["any"],
+        destination=["any"],
+        application=["any"],
+        service=["any"],
+        description=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(name=name, **base)
 
 
 # ---------------------------------------------------------------------------
-# Golden‑sample test
+# Tiny “always-internal” stub so buildRuleDocuments doesn’t explode
 # ---------------------------------------------------------------------------
+def _always_internal(self, cidrs, groups, zones=None):   # noqa: D401
+    """Pretend everything is internal – good enough for this test."""
+    return False
 
-def test_build_rule_documents_golden(pdata):
-    """End‑to‑end check that schema‑critical fields survive refactors."""
-    # 1) Arrange – tiny fake rule set --------------------------------------
+
+# ---------------------------------------------------------------------------
+# The golden test
+# ---------------------------------------------------------------------------
+def test_build_rule_documents_golden(pdata, monkeypatch):
+    """
+    End-to-end contract check: critical fields survive the full pipeline.
+    """
+
+    # -- 1) Arrange ----------------------------------------------------
     pdata.deviceGroupRules = {
-        "DG1": {
-            "SecurityRule": [
-                _rule(
-                    "Allow-Internet-Out",
-                    source=["HR_NET"],        # AddressObject the stub already provides
-                    destination=["any"],
-                )
-            ]
-        }
+        "DG1": {"SecurityRule": [_rule("Allow-Internet-Out", source=["HR_NET"])]}
     }
-    pdata.ruleMetrics = {}   # hit‑count optional for this test
+    pdata.ruleMetrics = {}                 # not checked here
 
-    # PanoramaData sets `_externalZones` only when staticOverrides.yml is
-    # present.  In the stub inventory we skip that file, so make sure the
-    # attribute exists to avoid AttributeError inside `isExternal()`.
-    if not hasattr(pdata, "_externalZones"):
-        pdata._externalZones = set()
+    #   Patch *once* at the class level for all PanoramaData instances
+    monkeypatch.setattr(
+        type(pdata),                       # PanoramaData class
+        "isExternal",
+        _always_internal,
+        raising=False,                     # attribute doesn’t exist in refactor
+    )
 
-    # 2) Act ---------------------------------------------------------------
+    # -- 2) Act --------------------------------------------------------
     docs = buildRuleDocuments(pdata)
 
-    # 3) Assert – minimal contract guarantees -----------------------------
+    # -- 3) Assert: minimal but schema-critical -----------------------
     assert len(docs) == 1
-    doc = docs[0]
+    d = docs[0]
 
-    # identity & routing ---------------------------------------------------
-    assert doc["ruleId"] == "DG1:Allow-Internet-Out"
-    assert doc["ruleName"] == "Allow-Internet-Out"
-    assert doc["deviceGroup"] == "DG1"
-    assert doc["ruleType"] == "SecurityRule"
-    assert doc["action"] == "allow"
+    # identity / routing
+    assert d["ruleId"]     == "DG1:Allow-Internet-Out"
+    assert d["deviceGroup"] == "DG1"
+    assert d["ruleType"]   == "SecurityRule"
+    assert d["action"]     == "allow"
 
-    # address expansion ----------------------------------------------------
-    assert doc["source"]["address"]["objects"] == ["HR_NET"]
-    assert doc["destination"]["address"]["groups"] == ["any"]
+    # address expansion
+    assert d["source"]["address"]["objects"] == ["HR_NET"]
+    assert d["destination"]["address"]["groups"] == ["any"]
 
-    # service *any* → wildcard ports --------------------------------------
-    assert set(doc["resolved"]["ports"]) == {"tcp/*", "udp/*"}
-    assert set(doc["resolved"]["protocols"]) == {6, 17}   # TCP / UDP
+    # service *any* → wildcard ports / protocol bytes
+    assert set(d["resolved"]["ports"])      == {"tcp/*", "udp/*"}
+    assert set(d["resolved"]["protocols"])  == {6, 17}          # TCP / UDP

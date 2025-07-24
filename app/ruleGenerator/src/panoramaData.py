@@ -106,6 +106,8 @@ class PanoramaData(PanoramaInventory):  # type: ignore[misc]
     def nestedObjectsInNetwork(self, parent_cidr):       # noqa: N802
         return self.nested_objects_in_network(parent_cidr)
 
+    def isExternal(self, cidrList, groupList, zoneList=None):  # noqa: N802
+        return self.is_external(cidrList, groupList, zoneList)
 # ---------------------------------------------------------------------------
 #  Convenience re‑exports for old import paths
 # ---------------------------------------------------------------------------
