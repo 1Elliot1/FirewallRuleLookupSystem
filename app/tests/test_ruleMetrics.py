@@ -1,63 +1,63 @@
-# _get_rule_metrics (uses heavy mocking)
 # tests/test_rule_metrics.py
 """
-Covers
-    • PanoramaData._get_rule_metrics
-    • PanoramaData._collectHitCountsPerRule
+Covers the hit-count helpers that live in **ruleGenerator.core.metrics**
 
-We monkey-patch pano_stub.op to return canned XML responses.
+    • RuleMetricsCollector._get_rule_metrics
+    • RuleMetricsCollector.collect_hit_counts
 """
 
-import xml.etree.ElementTree as ET
 from types import SimpleNamespace
+import xml.etree.ElementTree as ET
 import pytest
-from ruleGenerator.src.panoramaData import PanoramaData
 
+# ––––– project imports –––––––––––––––––––––––––––––––––––––––––––––––
+from ruleGenerator.core.inventory import PanoramaInventory
+from ruleGenerator.core.metrics   import RuleMetricsCollector
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-def make_xml(hit, last=None, first=None, created=None, modified=None):
-    """Return <response> element with a single device-vsys entry."""
-    stamp = lambda tag, val: f"<{tag}>{val}</{tag}>" if val is not None else ""
+# --------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------
+def _xml(hit, last=None, first=None, created=None, modified=None):
+    """<response> with a single <device-vsys><entry> …</entry></device-vsys>."""
+    tag = lambda k, v: f"<{k}>{v}</{k}>" if v is not None else ""
     return ET.fromstring(
         f"""
         <response status="success">
           <result>
-            <device-vsys>
-              <entry>
-                <hit-count>{hit}</hit-count>
-                {stamp('last-hit-timestamp', last)}
-                {stamp('first-hit-timestamp', first)}
-                {stamp('rule-creation-timestamp', created)}
-                {stamp('rule-modification-timestamp', modified)}
-              </entry>
-            </device-vsys>
+            <device-vsys><entry>
+              <hit-count>{hit}</hit-count>
+              {tag('last-hit-timestamp', last)}
+              {tag('first-hit-timestamp', first)}
+              {tag('rule-creation-timestamp', created)}
+              {tag('rule-modification-timestamp', modified)}
+            </entry></device-vsys>
           </result>
         </response>
-    """
+        """
     )
 
 @pytest.fixture
-def pdata(monkeypatch, pano_stub):
-    """PanoramaData with _collectDeviceGroupRules disabled for faster init."""
+def inv(monkeypatch, pano_stub):
+    """
+    Lightweight PanoramaInventory with *no* rules pulled from Panorama
+    (it’s enough for the metrics helper).
+    """
+    # skip network / rulebase queries for speed
     monkeypatch.setattr(
-        "ruleGenerator.src.panoramaData.PanoramaData._collectDeviceGroupRules",
-        lambda *_: None
+        PanoramaInventory,
+        "_collect_device_group_rules",
+        lambda self: setattr(self, "deviceGroupRules", {}),
     )
-    return PanoramaData(pano_stub)
+    return PanoramaInventory(pano_stub)
 
-
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------
 # _get_rule_metrics
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------
+def test_single_vsys(monkeypatch, inv, pano_stub):
+    coll = RuleMetricsCollector(inv)
+    monkeypatch.setattr(pano_stub, "op", lambda *_, **__: _xml(5, 1700, 1600, 1500, 1750))
 
-def test_single_vsys_parsing(monkeypatch, pdata, pano_stub):
-    xml = make_xml(hit=5, last=1700, first=1600, created=1500, modified=1750)
-    monkeypatch.setattr(pano_stub, "op", lambda *a, **kw: xml)
-
-    m = pdata._get_rule_metrics("DG", "security", "ALLOW_WEB")
+    m = coll._get_rule_metrics("DG", "security", "ALLOW_WEB")          # pylint: disable=protected-access
     assert m == {
         "hitCount": 5,
         "lastHit": 1700,
@@ -66,79 +66,60 @@ def test_single_vsys_parsing(monkeypatch, pdata, pano_stub):
         "modified": 1750,
     }
 
-
-def test_multi_vsys_sums_and_extremes(monkeypatch, pdata, pano_stub):
-    """Two device-vsys entries → sum hits, min(first), max(last/modified)."""
+def test_multi_vsys(monkeypatch, inv, pano_stub):
     xml = ET.fromstring(
         """
-        <response status="success">
-          <result>
-            <device-vsys>
-              <entry>
-                <hit-count>3</hit-count>
-                <last-hit-timestamp>2000</last-hit-timestamp>
-                <first-hit-timestamp>1500</first-hit-timestamp>
-                <rule-creation-timestamp>1400</rule-creation-timestamp>
-                <rule-modification-timestamp>1990</rule-modification-timestamp>
-              </entry>
-              <entry>
-                <hit-count>7</hit-count>
-                <last-hit-timestamp>2100</last-hit-timestamp>
-                <first-hit-timestamp>1600</first-hit-timestamp>
-                <rule-creation-timestamp>1300</rule-creation-timestamp>
-                <rule-modification-timestamp>2200</rule-modification-timestamp>
-              </entry>
-            </device-vsys>
-          </result>
-        </response>
+        <response status="success"><result><device-vsys>
+          <entry>
+            <hit-count>3</hit-count>
+            <last-hit-timestamp>2000</last-hit-timestamp>
+            <first-hit-timestamp>1500</first-hit-timestamp>
+            <rule-creation-timestamp>1400</rule-creation-timestamp>
+            <rule-modification-timestamp>1990</rule-modification-timestamp>
+          </entry>
+          <entry>
+            <hit-count>7</hit-count>
+            <last-hit-timestamp>2100</last-hit-timestamp>
+            <first-hit-timestamp>1600</first-hit-timestamp>
+            <rule-creation-timestamp>1300</rule-creation-timestamp>
+            <rule-modification-timestamp>2200</rule-modification-timestamp>
+          </entry>
+        </device-vsys></result></response>
         """
     )
-    monkeypatch.setattr(pano_stub, "op", lambda *a, **kw: xml)
+    monkeypatch.setattr(pano_stub, "op", lambda *_, **__: xml)
 
-    m = pdata._get_rule_metrics("DG", "security", "ALLOW_WEB")
+    coll = RuleMetricsCollector(inv)
+    m = coll._get_rule_metrics("DG", "security", "ALLOW_WEB")          # pylint: disable=protected-access
     assert m["hitCount"] == 10
     assert m["firstHit"] == 1500          # min
-    assert m["lastHit"] == 2100           # max
-    assert m["created"] == 1300           # min
+    assert m["lastHit"]  == 2100          # max
+    assert m["created"]  == 1300          # min
     assert m["modified"] == 2200          # max
 
+def test_non_digit_timestamps(monkeypatch, inv, pano_stub):
+    monkeypatch.setattr(pano_stub, "op", lambda *_, **__: _xml(1, "n/a", "n/a"))
 
-def test_non_digit_timestamps_ignored(monkeypatch, pdata, pano_stub):
-    xml = make_xml(hit=1, last="n/a", first="n/a")
-    monkeypatch.setattr(pano_stub, "op", lambda *a, **kw: xml)
-
-    m = pdata._get_rule_metrics("DG", "security", "ALLOW_WEB")
+    coll = RuleMetricsCollector(inv)
+    m = coll._get_rule_metrics("DG", "security", "ALLOW_WEB")          # pylint: disable=protected-access
     assert m["lastHit"] is None
     assert m["firstHit"] is None
 
-
-# ---------------------------------------------------------------------------
-# _collectHitCountsPerRule (integration)
-# ---------------------------------------------------------------------------
-
-def test_collectHitCounts(monkeypatch, pano_stub):
+# --------------------------------------------------------------------
+# collect_hit_counts (integration)
+# --------------------------------------------------------------------
+def test_collect_hit_counts(monkeypatch, inv, pano_stub):
     """
-    Build a fake deviceGroupRules structure with one SecurityRule
-    and patch pano.op so the helper picks up our canned metrics.
+    Inject a tiny fake rule bucket and ensure *collect_hit_counts()* stores
+    the metrics under the correct composite key.
     """
-    # --- fake rule bucket ---------------------------------------------------
-    rule_obj = SimpleNamespace(name="ALLOW_WEB")
-    device_group_rules = {
-        "DG1": {"SecurityRule": [rule_obj]},
+    inv.deviceGroupRules = {
+        "DG1": {"SecurityRule": [SimpleNamespace(name="ALLOW_WEB")]}
     }
+    monkeypatch.setattr(pano_stub, "op", lambda *_, **__: _xml(42))
 
-    # stub out collectDeviceGroupRules so we can inject our bucket
-    monkeypatch.setattr(
-        "ruleGenerator.src.panoramaData.PanoramaData._collectDeviceGroupRules",
-        lambda self: setattr(self, "deviceGroupRules", device_group_rules),
-    )
-
-    # canned XML for the op() call inside _get_rule_metrics
-    xml = make_xml(hit=42)
-    monkeypatch.setattr(pano_stub, "op", lambda *a, **kw: xml)
-
-    pd = PanoramaData(pano_stub)
-    pd._collectHitCountsPerRule()
+    coll = RuleMetricsCollector(inv)
+    coll.collect_hit_counts()
 
     key = "DG1:ALLOW_WEB"
-    assert pd.ruleMetrics[key]["hitCount"] == 42
+    assert inv.ruleMetrics[key]["hitCount"] == 42
