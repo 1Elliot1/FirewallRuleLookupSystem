@@ -1,107 +1,91 @@
-# isExternal / _cidrIsExternal logic
 # tests/test_zone_external.py
+"""
+Covers **external / internal-net handling** in the new modular stack.
+
+1.  _cidr_complement()           – pure helper (unchanged algorithm)
+2.  apply_static_overrides()     – populates
+        • inv._internalNets
+        • inv._externalZones
+        • EXT-INTERNET address/group synthesis
+"""
+
 from types import SimpleNamespace
+import ipaddress
+import textwrap
+
 import pytest
-from ruleGenerator.src.panoramaData import PanoramaData
+
+# core helpers under test ----------------------------------------------------
+from ruleGenerator.core.inventory import PanoramaInventory
+from ruleGenerator.core.overrides import _cidr_complement, apply_static_overrides
 
 
-# ---------------------------------------------------------------------------
-# Tiny stubs & helpers
-AO = lambda n, v: SimpleNamespace(name=n, value=v)
-AG = lambda n, mem: SimpleNamespace(name=n, static_value=list(mem))
+# ----------------------------------------------------------------------------
+# _cidr_complement -- quick sanity check
+# ----------------------------------------------------------------------------
+def test_cidr_complement_simple_halves():
+    # lower half removed ⇒ only upper half stays
+    assert _cidr_complement(["0.0.0.0/1"]) == ["128.0.0.0/1"]
 
-INTERNALS = ["10.0.0.0/8", "2001:db8:abcd::/48"]
+
+def test_cidr_complement_excludes_originals():
+    inside = ["10.0.0.0/8"]
+    comp = _cidr_complement(inside)
+    # no block we just passed in should re-appear in the complement
+    assert not any(ipaddress.ip_network(c).subnet_of(ipaddress.ip_network("10.0.0.0/8"))
+                   for c in comp)
 
 
-def _bootstrap(monkeypatch, pano_stub):
-    """Return PanoramaData with staticOverrides that define internal prefixes."""
-    # Empty inventory – we only care about _applyStaticOverrides
+# ----------------------------------------------------------------------------
+# apply_static_overrides – internal/external caches & synth objects
+# ----------------------------------------------------------------------------
+_INTERNALS = ["10.0.0.0/8", "2001:db8:abcd::/48"]
+
+
+@pytest.fixture
+def inv(monkeypatch, pano_stub, tmp_path):
+    """
+    Minimal PanoramaInventory with an overrides YAML that defines
+    *internalPrefixes* and *externalZones*.
+    """
+    # --- keep raw inventory empty -----------------------------------------
     empty = lambda *_: []
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.AddressObject.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.AddressGroup.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.DeviceGroup.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.Template.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.ApplicationObject.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.ApplicationGroup.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.ApplicationContainer.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.ServiceObject.refreshall", empty)
-    monkeypatch.setattr("ruleGenerator.src.panoramaData.ServiceGroup.refreshall", empty)
+    base   = "ruleGenerator.core.inventory"
+    monkeypatch.setattr(f"{base}.AddressObject.refreshall",   empty)
+    monkeypatch.setattr(f"{base}.AddressGroup.refreshall",    empty)
+    monkeypatch.setattr(f"{base}.DeviceGroup.refreshall",     empty)
+    monkeypatch.setattr(f"{base}.Template.refreshall",        empty)
+    monkeypatch.setattr(f"{base}.ApplicationObject.refreshall", empty)
+    monkeypatch.setattr(f"{base}.ApplicationGroup.refreshall",  empty)
+    monkeypatch.setattr(f"{base}.ApplicationContainer.refreshall", empty)
+    monkeypatch.setattr(f"{base}.ServiceObject.refreshall",   empty)
+    monkeypatch.setattr(f"{base}.ServiceGroup.refreshall",    empty)
 
-    # Short-circuit YAML loading; feed our own internalPrefixes list
-    def fake_apply(self, *a, **kw):
-        self._internalNets = [  # what _applyStaticOverrides normally sets
-            __import__("ipaddress").ip_network(c) for c in INTERNALS
-        ]
-        self._externalZones = {"dmz"}  # mark “dmz” as external
+    # --- Inventory --------------------------------------------------------
+    inv = PanoramaInventory(pano_stub)
 
-    monkeypatch.setattr(
-        "ruleGenerator.src.panoramaData.PanoramaData._applyStaticOverrides", fake_apply
-    )
+    # --- overrides.yml ----------------------------------------------------
+    yaml_path = tmp_path / "overrides.yml"
+    yaml_path.write_text(textwrap.dedent(f"""
+        internalPrefixes:
+          - {_INTERNALS[0]}
+          - {_INTERNALS[1]}
+        externalZones:
+          - DMZ
+    """))
 
-    return PanoramaData(pano_stub)
-
-
-# ---------------------------------------------------------------------------
-# _cidrIsExternal
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "cidr, expected",
-    [
-        ("10.1.1.0/24", False),                   # inside internal /8
-        ("192.168.0.0/16", True),                # outside
-        ("2001:db8:abcd::1/128", False),         # inside IPv6 internal
-        ("2001:db8:beef::/48", True),            # outside IPv6 range
-        ({"gte": "10.0.0.5", "lte": "10.0.0.10"}, False),
-        ({"gte": "10.0.0.5", "lte": "11.0.0.10"}, True),
-        ("any", True),
-    ],
-)
-def test_cidrIsExternal(monkeypatch, pano_stub, cidr, expected):
-    pdata = _bootstrap(monkeypatch, pano_stub)
-    assert pdata._cidrIsExternal(cidr) is expected
+    apply_static_overrides(inv, yaml_path)
+    return inv
 
 
-# ---------------------------------------------------------------------------
-# isExternal (rule-level)
-# ---------------------------------------------------------------------------
-def test_zone_based_external(monkeypatch, pano_stub):
-    pdata = _bootstrap(monkeypatch, pano_stub)
-    # Zone list with specific external zone overrides CIDR logic
-    assert pdata.isExternal(
-        cidrList=["10.1.1.1/32"], groupList=[], zoneList=["dmz"]
-    )
+def test_internal_and_external_caches(inv):
+    # _internalNets  -------------------------------------------------------
+    nets = {n.with_prefixlen for n in inv._internalNets}
+    assert set(_INTERNALS).issubset(nets)
 
+    # _externalZones  ------------------------------------------------------
+    assert inv._externalZones == {"dmz"}
 
-def test_group_and_object_internal(monkeypatch, pano_stub):
-    # Address object inside internal; group references it
-    ao = AO("HR_NET", "10.2.0.0/24")
-    ag = AG("HR_GROUP", ["HR_NET"])
-
-    monkeypatch.setattr(
-        "ruleGenerator.src.panoramaData.AddressObject.refreshall", lambda *_: [ao]
-    )
-    monkeypatch.setattr(
-        "ruleGenerator.src.panoramaData.AddressGroup.refreshall", lambda *_: [ag]
-    )
-
-    pdata = _bootstrap(monkeypatch, pano_stub)
-
-    assert pdata.isExternal(
-        cidrList=[],
-        groupList=["HR_NET", "HR_GROUP"],
-        zoneList=None,
-    ) is False
-
-
-def test_any_group_trumps_internal(monkeypatch, pano_stub):
-    pdata = _bootstrap(monkeypatch, pano_stub)
-    assert pdata.isExternal(
-        cidrList=["10.0.0.1/32"], groupList=["any"], zoneList=None
-    )
-
-
-def test_cidr_outside_internal(monkeypatch, pano_stub):
-    pdata = _bootstrap(monkeypatch, pano_stub)
-    assert pdata.isExternal(
-        cidrList=["172.16.0.0/16"], groupList=[], zoneList=None
-    )
+    # EXT-INTERNET object & group synthesised -----------------------------
+    assert "EXT-INTERNET" in inv.addressObjectByName
+    assert "EXT-INTERNET" in inv.addressGroupByName
