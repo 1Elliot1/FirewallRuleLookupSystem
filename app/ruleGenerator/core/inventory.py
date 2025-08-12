@@ -424,6 +424,36 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
             self.expand_services(services or []),
         )
 
+    #! Drop in method since original got lost in refactor. Compare to old method to ensure accuracy
+    def is_external(
+        self,
+        cidr_list: List[str | dict],
+        group_list: List[str],
+        zone_list: List[str] | None = None,
+    ) -> bool:
+        # explicit labels
+        if any(g.upper() == "EXT-INTERNET" for g in group_list) or "any" in group_list:
+            return True
+
+        ext_zones = getattr(self, "_externalZones", set())
+        if zone_list and any(z.lower() in ext_zones for z in zone_list):
+            return True
+
+        internal_nets = getattr(self, "_internalNets", [])
+        if not internal_nets:
+            return False  # no config → don’t call it external
+
+        import ipaddress
+        for c in cidr_list:
+            if isinstance(c, dict):
+                lo = ipaddress.ip_address(c["gte"]); hi = ipaddress.ip_address(c["lte"])
+                if not any((lo in n and hi in n) for n in internal_nets):
+                    return True
+            else:
+                net = ipaddress.ip_network(c, strict=False)
+                if not any(net.subnet_of(n) or net == n for n in internal_nets):
+                    return True
+        return False
 
 # ---------------------------------------------------------------------------
 #  __all__

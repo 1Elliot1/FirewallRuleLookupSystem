@@ -27,11 +27,9 @@ from ruleGenerator.core import (
     RuleMetricsCollector,
     calc_rule_weight,
     is_shadowed,
-    ip_in_cidr,
 )
 from ruleGenerator.core.inventory import ip_in_cidr as _ip_in_cidr
-ip_in_cidr = _ip_in_cidr  
-_ip_in_cidr = _ip_in_cidr 
+ip_in_cidr = _ip_in_cidr
 # ---------------------------------------------------------------------------
 #  Facade class
 # ---------------------------------------------------------------------------
@@ -89,7 +87,7 @@ class PanoramaData(PanoramaInventory):  # type: ignore[misc]
     # ------------------------------------------------------------------
     #  Re‑export the small ip‑in‑cidr helper for callers that used it
     # ------------------------------------------------------------------
-    ip_in_cidr = staticmethod(ip_in_cidr)  # pylint: disable=invalid-name
+    ip_in_cidr = staticmethod(_ip_in_cidr)  # pylint: disable=invalid-name
 
     # ------------------------------------------------------------------
     #  Legacy camel-case helper wrappers (used by old tests & scripts)
@@ -114,5 +112,4 @@ class PanoramaData(PanoramaInventory):  # type: ignore[misc]
 __all__ = [
     "PanoramaData",
     "ip_in_cidr",
-    "_ip_in_cidr"
 ]

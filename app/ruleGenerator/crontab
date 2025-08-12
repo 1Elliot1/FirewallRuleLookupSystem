@@ -1,2 +1,2 @@
-*/55 * * * * /bin/sh -c 'cd /app && DSTAMP=$(date -u +\%Y\%m\%d\%H\%M); python /app/src/generateRuleDocs.py --out "/app/out/ruleMetrics-${DSTAMP}.ndjson"'
+*/55 * * * * cd /app/src && DSTAMP=$(date -u +\%Y\%m\%d\%H\%M) && exec python -m ruleGenerator.src.generateRuleDocs --out "/app/out/ruleMetrics-${DSTAMP}.ndjson"
 

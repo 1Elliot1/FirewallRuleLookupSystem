@@ -46,8 +46,11 @@ _LOG = logging.getLogger(__name__)
 
 def apply_static_overrides(inv: PanoramaInventory, path: str | Path | None = None) -> None:  # noqa: N802 – keep legacy name
     """Merge static‑override YAML into *inv* (in‑place)."""
-    path = Path(path or inv.__class__.__module__).resolve().parent / "staticOverrides.yml" if path is None else Path(path)
-
+    if path is None:
+        #default: ruleGenerator/src/staticOverrides.yml
+        path = Path(__file__).resolve().parents[1] / "src" / "staticOverrides.yml"
+    path = Path(path)
+    
     if not path.is_file():
         _LOG.warning("Static overrides file '%s' not found, skipping", path)
         return

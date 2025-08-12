@@ -132,7 +132,7 @@ class RuleMetricsCollector:
             "lastHit": last_hit,
             "firstHit": first_hit,
             "created": created,
-            "modified": modified,
+            "lastModified": modified,
         }
 
 
