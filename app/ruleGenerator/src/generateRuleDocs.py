@@ -8,8 +8,8 @@ import pathlib
 import sys
 from panos.panorama import Panorama
 from dotenv import load_dotenv
-from panoramaData import PanoramaData
-from ruleDocumentBuilder import buildRuleDocuments
+from ruleGenerator.src.panoramaData import PanoramaData
+from ruleGenerator.src.ruleDocumentBuilder import buildRuleDocuments
 
 '''
 This script generates rule documents from Panorama data and writes them to an output file.

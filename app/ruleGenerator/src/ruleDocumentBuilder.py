@@ -19,9 +19,11 @@ from __future__ import annotations
 
 from typing import List, Dict, Tuple, Set
 from datetime import datetime, timezone
-from .panoramaData import PanoramaData
 import ipaddress
 import re
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ruleGenerator.src.panoramaData import PanoramaData
 
 PROTOCOL_TO_BYTE = {
         "tcp": 6,
@@ -69,6 +71,7 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                 )
 
                 # ---------------- EXT/INT Flags -----------------------------
+                #! ISEXTERNAL METHOD NO LONGER EXISTS-- MUST REPLACE
                 srcIsExternal = panData.isExternal(srcCidrs, srcGroups, srcZones)
                 destIsExternal = panData.isExternal(destCidrs, destGroups, destZones)
 
@@ -174,7 +177,6 @@ def _cidrOrRange(token: str | dict | None) -> str | dict | None:
     """ 
     Return a value valid for IP_range or None if not parsable
     """
-    
     if isinstance(token, dict):
         return token 
     if not token or token.lower() in {"any", "unknown", ""}:
@@ -277,51 +279,3 @@ def _expandAddressReferences(
         cidrs = deduped
 
     return list(objects), list(groups), list(cidrs)
-
-_RANGE_RE = re.compile(r"\s*([0-9a-fA-F.:]+)\s*-\s*([0-9a-fA-F.:]+)\s*")
-
-def _as_ip_range(token: str) -> str | dict | None:
-    """
-    Convert PAN-OS token → value acceptable for ES ip_range field.
-
-    •  CIDR → canonical CIDR string
-    •  single IP → /32 or /128 CIDR
-    •  dash-range → {"gte": ip1, "lte": ip2}
-    •  anything unparseable → None  (caller should drop it)
-    """
-    if not token or token.lower() in {"any", "unknown"}:
-        return None
-
-    # -- dash-range ------------------------------------------------------
-    m = _RANGE_RE.fullmatch(token)
-    if m:
-        start, end = m.group(1), m.group(2)
-        # validate both ends
-        ipaddress.ip_address(start)
-        ipaddress.ip_address(end)
-        return {"gte": start, "lte": end}
-
-    # -- already CIDR ----------------------------------------------------
-    if "/" in token:
-        return ipaddress.ip_network(token, strict=False).with_prefixlen
-
-    # -- single host IP --------------------------------------------------
-    try:
-        ip_obj = ipaddress.ip_address(token)
-        mask   = 32 if ip_obj.version == 4 else 128
-        return f"{ip_obj}/{mask}"
-    except ValueError:
-        # fall through → unparsable
-        return None
-"""
-Be sure to add the helper caches to the PanoramaData class:
-    self.addressObjByName   = {o.name: o   for o in self.addressObjects}
-    self.addressGroupByName = {g.name: g   for g in self.addressGroups}
-    self.appGroupByName     = {g.name: g   for g in self.applicationGroup}
-    self.appContainerByName = {c.name: c   for c in self.applicationContainers}
-    self.predefContainerByName = self.predefinedObjectContainers
-    self.serviceGroupByName = {g.name: g   for g in self.serviceGroups}
-    self.leafAppNames       = {a.name for a in self.applicationObject}
-    self.expandedAppGroupCache: dict[str, list[str]] = {}
-
-"""
