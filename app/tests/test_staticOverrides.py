@@ -154,3 +154,54 @@ def test_new_application_created_if_absent(inv, tmp_path):
     apply_static_overrides(inv, yaml_path)
 
     assert inv.applicationToPorts["new-app"]["tcp"] == ["1234"]
+
+def test_if_nonexistent_does_not_overwrite(inv, tmp_path):
+    inv.addressObjectByName["EXISTING"] = AO("EXISTING", "192.168.0.0/24")
+    p = _write_yaml(tmp_path, "addressObjects:\n  EXISTING: 10.0.0.0/24\n")
+    apply_static_overrides(inv, p)
+    assert inv.addressObjectByName["EXISTING"].value == "192.168.0.0/24"
+
+def test_overrides_idempotent(inv, tmp_path):
+    p = _write_yaml(tmp_path, "applications:\n  a:\n    tcp: [80, 443]\n")
+    apply_static_overrides(inv, p)
+    snap1 = inv.applicationToPorts.copy()
+    apply_static_overrides(inv, p)
+    assert inv.applicationToPorts == snap1
+
+def test_service_merge_and_range(inv, tmp_path):
+    inv.serviceToPorts["svcA"] = {"tcp": ["8080"]}
+    p = _write_yaml(tmp_path, """
+      services:
+        svcA:
+          _mode: merge
+          tcp: [8080, 8081]
+        svcB:
+          _mode: if_nonexistent
+          tcp: ["9000-9002"]
+          udp: [53]
+    """)
+    apply_static_overrides(inv, p)
+    assert inv.serviceToPorts["svcA"]["tcp"] == ["8080", "8081"]
+    assert inv.serviceToPorts["svcB"]["tcp"] == ["9000", "9001", "9002"]
+    assert inv.serviceToPorts["svcB"]["udp"] == ["53"]
+
+def test_internal_external_ext_internet(inv, tmp_path):
+    p = _write_yaml(tmp_path, """
+      internalPrefixes: [10.0.0.0/8, 192.168.0.0/16]
+      externalZones: [Untrust, DMZ]
+    """)
+    apply_static_overrides(inv, p)
+    assert {str(n) for n in inv._internalNets} == {"10.0.0.0/8", "192.168.0.0/16"}
+    assert inv._externalZones == {"untrust", "dmz"}
+    grp = inv.addressGroupByName["EXT-INTERNET"]
+    assert grp.static_value              # has EXT-1, EXT-2, ...
+    for name in grp.static_value:
+        assert "EXT-INTERNET" in inv._addrToGroup[name]
+
+from ruleGenerator.core.ports import PortResolver
+def test_portresolver_reflects_overrides(inv, tmp_path):
+    p = _write_yaml(tmp_path, "applications:\n  web:\n    tcp: [80, 443]\n")
+    apply_static_overrides(inv, p)
+    pr = PortResolver(inv)
+    out = pr.enrich_rule_with_ports(apps=["web"], services=[], service_field_raw=["application-default"])
+    assert {"tcp/80", "tcp/443"} <= set(out["resolvedPorts"])
