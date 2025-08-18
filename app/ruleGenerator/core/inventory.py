@@ -432,6 +432,7 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
         zone_list: List[str] | None = None,
     ) -> bool:
         # explicit labels
+        #! Doesnt sound correct that "any" in group_list necessarily means ext-internet. Find better fix for this
         if any(g.upper() == "EXT-INTERNET" for g in group_list) or "any" in group_list:
             return True
 
