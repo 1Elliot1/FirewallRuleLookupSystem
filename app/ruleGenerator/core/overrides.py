@@ -115,23 +115,25 @@ def _apply_internal_external(inv: PanoramaInventory, blob: dict) -> None:
 def _apply_applications(inv: PanoramaInventory, blob: dict) -> None:
     for app, entry in blob.items():
         mode, payload = _extract_mode(entry)
-        ports_map = {proto.lower(): [str(p) for p in ports] for proto, ports in (payload or {}).items()}
-
+        ports_map = {
+            proto.lower(): _normalize_ports(ports)
+            for proto, ports in (payload or {}).items()
+        }
         exists = app in getattr(inv, "applicationToPorts", {})
 
         def create():
-            inv.applicationToPorts.setdefault(app, {}).update(ports_map)  # type: ignore[attr-defined]
+            inv.applicationToPorts.setdefault(app, {}).update(ports_map)
 
         def overwrite():
-            inv.applicationToPorts[app] = ports_map  # type: ignore[attr-defined]
+            inv.applicationToPorts[app] = ports_map
 
         def merge():
-            target = inv.applicationToPorts.setdefault(app, {})  # type: ignore[attr-defined]
+            target = inv.applicationToPorts.setdefault(app, {})
             for proto, plist in ports_map.items():
-                target.setdefault(proto, [])
-                target[proto].extend(p for p in plist if p not in target[proto])
+                target[proto] = _merge_ports(target.get(proto, []), plist)
 
         _apply_by_mode(mode, exists, merge, overwrite, create)
+
 
 
 def _apply_application_groups(inv: PanoramaInventory, blob: dict) -> None:
@@ -158,22 +160,25 @@ def _apply_application_groups(inv: PanoramaInventory, blob: dict) -> None:
 def _apply_services(inv: PanoramaInventory, blob: dict) -> None:
     for svc, entry in blob.items():
         mode, payload = _extract_mode(entry)
-        ports_map = {proto.lower(): list(ports) for proto, ports in (payload or {}).items()}
+        ports_map = {
+            proto.lower(): _normalize_ports(ports)
+            for proto, ports in (payload or {}).items()
+        }
         exists = svc in getattr(inv, "serviceToPorts", {})
 
         def create():
-            inv.serviceToPorts.setdefault(svc, {}).update(ports_map)  # type: ignore[attr-defined]
+            inv.serviceToPorts.setdefault(svc, {}).update(ports_map)
 
         def overwrite():
-            inv.serviceToPorts[svc] = ports_map  # type: ignore[attr-defined]
+            inv.serviceToPorts[svc] = ports_map
 
         def merge():
-            target = inv.serviceToPorts.setdefault(svc, {})  # type: ignore[attr-defined]
+            target = inv.serviceToPorts.setdefault(svc, {})
             for proto, plist in ports_map.items():
-                target.setdefault(proto, [])
-                target[proto].extend(p for p in plist if p not in target[proto])
+                target[proto] = _merge_ports(target.get(proto, []), plist)
 
         _apply_by_mode(mode, exists, merge, overwrite, create)
+
 
 
 def _apply_address_objects(inv: PanoramaInventory, blob: dict) -> None:
@@ -325,6 +330,42 @@ def _add_to_nets(inv: PanoramaInventory, name: str, cidr: str, *, replace: bool 
         inv._nets[:] = [t for t in inv._nets if t[1] != name]  # pylint: disable=protected-access
 
     inv._nets.append((net, name))  # pylint: disable=protected-access
+
+# --- put these helpers in overrides.py --------------------------------------
+
+def _expand_port_token(tok) -> list[str]:
+    """Accept ints or strings; expand '9000-9002' -> ['9000','9001','9002']."""
+    if isinstance(tok, int):
+        return [str(tok)]
+    s = str(tok).strip()
+    if s in {"*", "any"}:
+        return [s]
+    if "-" in s:
+        lo, hi = s.split("-", 1)
+        if lo.isdigit() and hi.isdigit():
+            a, b = int(lo), int(hi)
+            if a > b:
+                a, b = b, a
+            return [str(p) for p in range(a, b + 1)]
+    return [s]
+
+def _normalize_ports(seq) -> list[str]:
+    """Coerce to strings, expand ranges, de-dup while preserving order."""
+    out, seen = [], set()
+    for item in (seq or []):
+        for p in _expand_port_token(item):
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+    return out
+
+def _merge_ports(existing: list[str], incoming) -> list[str]:
+    """Existing first; then normalized incoming; no dups; order preserved."""
+    base = _normalize_ports(existing)
+    for p in _normalize_ports(incoming):
+        if p not in base:
+            base.append(p)
+    return base
 
 
 # ---------------------------------------------------------------------------

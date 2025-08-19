@@ -265,7 +265,7 @@ def _expandAddressReferences(
                     if cidrVal is not None:
                         cidrs.append(cidrVal)
             continue
-
+        
         # ── Literal IP/CIDR/Range ─────────────────────────────
         lit = _cidrOrRange(reference)
         if lit is not None:
@@ -274,14 +274,14 @@ def _expandAddressReferences(
 
         # ── Fallback: literal token kept as a group
         groups.add(reference)
-    seen = set()
-    deduped = []
-    for item in cidrs:
-        key = item if isinstance(item, str) else (item["gte"], item["lte"])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    cidrs = deduped
+        seen = set()
+        deduped = []
+        for item in cidrs:
+            key = item if isinstance(item, str) else (item["gte"], item["lte"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        cidrs = deduped
 
     return list(objects), list(groups), list(cidrs)
