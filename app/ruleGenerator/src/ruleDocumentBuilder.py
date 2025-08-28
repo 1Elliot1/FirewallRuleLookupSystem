@@ -264,6 +264,12 @@ def _expandAddressReferences(
                     cidrVal = _cidrOrRange(object.value)
                     if cidrVal is not None:
                         cidrs.append(cidrVal)
+            continue
+        
+        # ── Literal IP/CIDR/Range ─────────────────────────────
+        lit = _cidrOrRange(reference)
+        if lit is not None:
+            cidrs.append(lit)
             continue 
 
         # ── Fallback: literal token kept as a group

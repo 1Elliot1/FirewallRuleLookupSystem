@@ -64,47 +64,45 @@ class PanoramaData(PanoramaInventory):  # type: ignore[misc]
     # ------------------------------------------------------------------
     #  Ports helper (same signature as old enrichRuleWithPorts)
     # ------------------------------------------------------------------
-    def enrichRuleWithPorts(self, apps: List[str], services: List[str], serviceFieldRaw: List[str]):  # noqa: N802
+    def enrichRuleWithPorts(self, apps: List[str], services: List[str], serviceFieldRaw: List[str]):  
         return self._port_resolver.enrich_rule_with_ports(apps, services, serviceFieldRaw)
     
     # ------------------------------------------------------------------
     #  Group-expansion helpers (delegate to base class)
     # ------------------------------------------------------------------
-    resolveAppAndServiceGroups = PanoramaInventory.resolve_app_and_service_groups 
-    _expand_app_group = PanoramaInventory._expand_app_group           
-    _expand_service_group = PanoramaInventory._expand_service_group  
+
+    def resolveAppAndServiceGroups(self, apps, services):  # noqa: N802
+        # call the real expanders on the base; preserves order + de-dupes
+        return self.expand_applications(apps or []), self.expand_services(services or [])
 
 
     # ------------------------------------------------------------------
     #  Metrics helpers (method names unchanged)
     # ------------------------------------------------------------------
-    def calcRuleWeight(self, doc: Dict):  # noqa: N802
+    def calcRuleWeight(self, doc: Dict): 
         return calc_rule_weight(doc)
 
-    def isShadowed(self, candidate: Dict, earlier: List[Dict]):  # noqa: N802
+    def isShadowed(self, candidate: Dict, earlier: List[Dict]):  
         return is_shadowed(candidate, earlier)
 
     # ------------------------------------------------------------------
     #  Re‑export the small ip‑in‑cidr helper for callers that used it
     # ------------------------------------------------------------------
-    ip_in_cidr = staticmethod(_ip_in_cidr)  # pylint: disable=invalid-name
+    ip_in_cidr = staticmethod(_ip_in_cidr)  
 
-    # ------------------------------------------------------------------
-    #  Legacy camel-case helper wrappers (used by old tests & scripts)
-    # ------------------------------------------------------------------
-    def addressGroupsForObject(self, obj):               # noqa: N802
+    def addressGroupsForObject(self, obj):               
         return self.address_groups_for_object(obj)
 
-    def expandAddressGroups(self, group_name):           # noqa: N802
+    def expandAddressGroups(self, group_name):          
         return self.expand_address_groups(group_name)
 
-    def allNestedGroupNames(self, group_name):           # noqa: N802
+    def allNestedGroupNames(self, group_name):          
         return self.all_nested_group_names(group_name)
 
-    def nestedObjectsInNetwork(self, parent_cidr):       # noqa: N802
+    def nestedObjectsInNetwork(self, parent_cidr):     
         return self.nested_objects_in_network(parent_cidr)
 
-    def isExternal(self, cidrList, groupList, zoneList=None):  # noqa: N802
+    def isExternal(self, cidrList, groupList, zoneList=None):  
         return self.is_external(cidrList, groupList, zoneList)
 # ---------------------------------------------------------------------------
 #  Convenience re‑exports for old import paths

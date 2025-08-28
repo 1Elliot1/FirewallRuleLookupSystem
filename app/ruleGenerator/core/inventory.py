@@ -340,7 +340,7 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
         return tuple(
             name
             for net, name in self._nets
-            if net.version == parent.version and net != parent and net.subnet_of(parent)
+            if net.version == parent.version and net.subnet_of(parent)
         )
     # ----------------------------------------------------------------
     #  Application / service group helpers
@@ -416,44 +416,55 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
     # ----------------------------------------------------------------
     #  Convenience combo helper used by rule builders
     # ----------------------------------------------------------------
-    def resolve_app_and_service_groups(
-        self, apps: List[str] | None, services: List[str] | None
-    ) -> Tuple[List[str], List[str]]:
-        return (
-            self.expand_applications(apps or []),
-            self.expand_services(services or []),
-        )
-
-    #! Drop in method since original got lost in refactor. Compare to old method to ensure accuracy
     def is_external(
         self,
         cidr_list: List[str | dict],
         group_list: List[str],
         zone_list: List[str] | None = None,
     ) -> bool:
-        # explicit labels
-        if any(g.upper() == "EXT-INTERNET" for g in group_list) or "any" in group_list:
-            return True
+        import ipaddress
 
+        # ---- 1) Zones marked external --------------------------
         ext_zones = getattr(self, "_externalZones", set())
-        if zone_list and any(z.lower() in ext_zones for z in zone_list):
-            return True
+        if zone_list:
+            for z in zone_list:
+                if isinstance(z, str) and z.lower() != "any" and z.lower() in ext_zones:
+                    return True
 
+        # ---- 2) Groups/objects explicitly labeled external --------------------
+        # EXT-INTERNET group, or the generated EXT-1/EXT-2/... objects.
+        def _is_ext_token(name: str) -> bool:
+            u = name.upper()
+            return u == "EXT-INTERNET" or u.startswith("EXT-")  # your overrides create these
+
+        for g in group_list or []:
+            if isinstance(g, str) and _is_ext_token(g):
+                return True
+
+        # ---- 3) Address math against internalPrefixes -------------------------
         internal_nets = getattr(self, "_internalNets", [])
         if not internal_nets:
-            return False  # no config → don’t call it external
+            # With no internal config, err on the side of NOT labeling external
+            return False
 
-        import ipaddress
-        for c in cidr_list:
-            if isinstance(c, dict):
-                lo = ipaddress.ip_address(c["gte"]); hi = ipaddress.ip_address(c["lte"])
-                if not any((lo in n and hi in n) for n in internal_nets):
-                    return True
-            else:
-                net = ipaddress.ip_network(c, strict=False)
-                if not any(net.subnet_of(n) or net == n for n in internal_nets):
-                    return True
+        for token in (cidr_list or []):
+            try:
+                if isinstance(token, dict):
+                    lo = ipaddress.ip_address(token["gte"])
+                    hi = ipaddress.ip_address(token["lte"])
+                    # external if the entire range isn't contained by any internal net
+                    if not any((lo in n and hi in n) for n in internal_nets):
+                        return True
+                else:
+                    net = ipaddress.ip_network(token, strict=False)
+                    # external if this CIDR is not fully inside any internal net
+                    if not any(net.subnet_of(n) or net == n for n in internal_nets):
+                        return True
+            except Exception:
+                continue
+
         return False
+
 
 # ---------------------------------------------------------------------------
 #  __all__

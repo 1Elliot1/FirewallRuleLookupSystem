@@ -38,7 +38,7 @@ import ipaddress
 import logging
 import math
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Iterable, Set
 
 from .inventory import PanoramaInventory
 
@@ -137,103 +137,152 @@ class RuleMetricsCollector:
 
 
 # ---------------------------------------------------------------------------
-#  Rule‑weight formula (unchanged logic)
+#  Rule‑weight formula 
 # ---------------------------------------------------------------------------
+# normalize breadth to a 0..32 scale for both v4 and v6
+def _cidr_breadth32(token) -> float:
+    if isinstance(token, dict):  # {"gte": "...", "lte": "..."}
+        # treat ranges as broad; assume IPv4 unless we can detect otherwise
+        try:
+            v = ipaddress.ip_address(token["gte"]).version
+        except Exception:
+            v = 4
+        return 32.0 if v == 4 else 32.0  # normalized cap
+    try:
+        net = ipaddress.ip_network(token, strict=False)
+        return (32.0 * ( (32 if net.version == 4 else 128) - net.prefixlen )
+               / (32 if net.version == 4 else 128))
+    except Exception:
+        return 0.0
 
-def calc_rule_weight(doc: dict) -> int:  # noqa: D401 – imper imperative name
-    """Return weight score using the same heuristic as the monolith."""
-    S = len(doc["source"]["address"]["objects"])
-    D = len(doc["destination"]["address"]["objects"])
-    serv = len(doc["services"])
-    apps = len(doc["applications"])
+def _avg_breadth32(cidrs) -> float:
+    if not cidrs:
+        return 0.0
+    vals = [_cidr_breadth32(c) for c in cidrs]
+    return sum(vals) / max(1, len(vals))
 
-    metric_logged = math.log(S * D, 10) if S * D != 0 else 1
+def calc_rule_weight(doc: dict) -> int:
+    src = doc["source"]["address"]
+    dst = doc["destination"]["address"]
 
-    weight = int(metric_logged * 10 + serv * 3 + apps * 3)
-    if "any" in doc["applications"] and "any" in doc["services"]:
-        weight += 24
-    return weight
+    n_objs = len(src["objects"]) + len(dst["objects"])
+    n_groups = len(src["groups"]) + len(dst["groups"])
+    n_apps = len(doc["applications"])
+    n_svcs = len(doc["services"])
+    n_ports = len(doc.get("resolved", {}).get("ports", []))
+
+    # breadth in "IPv4-equivalent bits" (0..32) per side
+    b_src = _avg_breadth32(src.get("cidr", []))
+    b_dst = _avg_breadth32(dst.get("cidr", []))
+
+    f_any_svc = any(s.lower() == "any" for s in doc["services"])
+    f_app_def = any(s == "application-default" for s in doc["services"])
+    f_any_app = any(a.lower() == "any" for a in doc["applications"])
+
+    f_ext_src = bool(src.get("isExternal"))
+    f_ext_dst = bool(dst.get("isExternal"))
+
+    # Complexity / surface (log keeps large rules from exploding)
+    w = 10
+    w += 3 * math.log1p(n_objs + n_groups)        # address complexity
+    w += 2 * math.log1p(n_apps) + 2 * math.log1p(n_svcs)
+    w += 1 * math.log1p(n_ports)                   # effective surface
+
+    # Breadth (wide CIDRs drive weight up)
+    w += 1.5 * (b_src + b_dst)
+
+    # Permissiveness
+    if f_any_svc:         w += 20
+    elif f_app_def:       w += 5
+    if f_any_app:         w += 10
+
+    # Externality
+    if f_ext_dst:         w += 8
+    if f_ext_src:         w += 4
+
+    return int(round(w))
 
 # ---------------------------------------------------------------------------
 #  Shadowing detector (identical to old behaviour)
 # ---------------------------------------------------------------------------
-
-def is_shadowed(candidate: dict, earlier: List[dict]) -> bool:
-    """Return *True* if *candidate* rule is fully shadowed by any earlier."""
-    for sup in earlier:  # iterate top‑down
-        if sup["action"] != candidate["action"]:
-            continue
-        if not _subset(candidate["source"]["zones"], sup["source"]["zones"]):
-            continue
-        if not _subset(candidate["destination"]["zones"], sup["destination"]["zones"]):
-            continue
-        if not _subset(candidate["applications"], sup["applications"]):
-            continue
-        if not _subset(candidate["services"], sup["services"]):
-            continue
-        if not _cidrs_cover(  # src
-            candidate["source"]["address"]["cidr"],
-            sup["source"]["address"]["cidr"],
-        ):
-            continue
-        if not _cidrs_cover(  # dst
-            candidate["destination"]["address"]["cidr"],
-            sup["destination"]["address"]["cidr"],
-        ):
-            continue
+def _subset_anyaware(child: Iterable[str], parent: Iterable[str]) -> bool:
+    c = {x.lower() for x in (child or [])}
+    p = {x.lower() for x in (parent or [])}
+    if not c:
         return True
-    return False
-
-
-# ---------------------------------------------------------------------------
-#  Helper functions – unchanged
-# ---------------------------------------------------------------------------
-
-def _subset(needle: List[str], haystack: List[str]) -> bool:
-    if not needle:
+    if not p or "any" in p:
         return True
-    if "any" in haystack:
-        return True
-    return set(needle).issubset(haystack)
+    if "any" in c:
+        # child==any can only be covered if parent==any
+        return "any" in p and len(p) == 1
+    return c.issubset(p)
 
+def _range_in_net(lo, hi, net) -> bool:
+    try:
+        lo_ip = ipaddress.ip_address(lo)
+        hi_ip = ipaddress.ip_address(hi)
+    except Exception:
+        return False
+    if lo_ip.version != net.version or hi_ip.version != net.version:
+        return False
+    return (lo_ip in net) and (hi_ip in net)
 
-
-def _cidrs_cover(child: List[str | dict], parent: List[str | dict]) -> bool:
-    if not child:
-        return True
-    if "any" in parent:
-        return True
-
-    parent_norm: List[ipaddress.IPv4Network | ipaddress.IPv6Network | Tuple] = []
-    for p in parent:
-        if isinstance(p, dict):
-            parent_norm.append((
-                ipaddress.ip_address(p["gte"]),
-                ipaddress.ip_address(p["lte"]),
-            ))
+def _token_covered_by_sup(token, sup_token) -> bool:
+    # token/sup_token ∈ { "CIDR string" | {"gte": ip, "lte": ip} }
+    try:
+        if isinstance(sup_token, dict):
+            # parent is a range → it only covers if child's entire range/net is inside it
+            if isinstance(token, dict):
+                return ipaddress.ip_address(token["gte"]) >= ipaddress.ip_address(sup_token["gte"]) and \
+                       ipaddress.ip_address(token["lte"]) <= ipaddress.ip_address(sup_token["lte"])
+            else:
+                net = ipaddress.ip_network(token, strict=False)
+                return _range_in_net(sup_token["gte"], sup_token["lte"], net)  # parent range inside child net? invert
         else:
-            parent_norm.append(ipaddress.ip_network(p, strict=False))
+            parent_net = ipaddress.ip_network(sup_token, strict=False)
+            if isinstance(token, dict):
+                return _range_in_net(token["gte"], token["lte"], parent_net)
+            else:
+                child_net = ipaddress.ip_network(token, strict=False)
+                return child_net.version == parent_net.version and child_net.subnet_of(parent_net)
+    except Exception:
+        return False
 
-    for c in child:
-        if isinstance(c, dict):
-            c_lo = ipaddress.ip_address(c["gte"])
-            c_hi = ipaddress.ip_address(c["lte"])
-            ok = any(
-                (isinstance(p, tuple) and p[0] <= c_lo <= c_hi <= p[1])
-                or (not isinstance(p, tuple) and c_lo in p and c_hi in p)
-                for p in parent_norm
-            )
-        else:
-            c_net = ipaddress.ip_network(c, strict=False)
-            ok = any(
-                (isinstance(p, tuple) and p[0] <= c_net.network_address <= c_net.broadcast_address <= p[1])
-                or (not isinstance(p, tuple) and c_net.subnet_of(p))
-                for p in parent_norm
-            )
-        if not ok:
+def _cidrs_cover(child_list: List, parent_list: List) -> bool:
+    # Empty parent_list means "any" (covers everything)
+    if not child_list:
+        return True
+    if not parent_list:
+        return True
+    for c in child_list:
+        if not any(_token_covered_by_sup(c, p) for p in parent_list):
             return False
     return True
 
+def _ports_covered(child_ports: Iterable[str], parent_ports: Iterable[str]) -> bool:
+    # empty → treat as covered (some exotic rules might not resolve)
+    c = set(child_ports or [])
+    p = set(parent_ports or [])
+    return not c or not p or c.issubset(p)
+
+def is_shadowed(candidate: dict, earlier: List[dict]) -> bool:
+    """True if *candidate* is fully shadowed by any earlier SAME-ACTION rule."""
+    cand_ports = candidate.get("resolved", {}).get("ports", [])
+    for sup in earlier:
+        if sup.get("action") != candidate.get("action"):
+            continue
+        if not _subset_anyaware(candidate["source"]["zones"], sup["source"]["zones"]):
+            continue
+        if not _subset_anyaware(candidate["destination"]["zones"], sup["destination"]["zones"]):
+            continue
+        if not _cidrs_cover(candidate["source"]["address"]["cidr"], sup["source"]["address"]["cidr"]):
+            continue
+        if not _cidrs_cover(candidate["destination"]["address"]["cidr"], sup["destination"]["address"]["cidr"]):
+            continue
+        if not _ports_covered(cand_ports, sup.get("resolved", {}).get("ports", [])):
+            continue
+        return True
+    return False
 
 # ---------------------------------------------------------------------------
 #  __all__
