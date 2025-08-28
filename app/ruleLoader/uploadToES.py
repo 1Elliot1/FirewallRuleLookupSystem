@@ -57,6 +57,7 @@ class RuleFileHandler(FileSystemEventHandler):
     def processFile(self, filePath: pathlib.Path):
         try:
             # Create index name with timestamp
+            #! Here you are creating an index based on the minute. This results in oversharding over time. Are there any downsides or complications to instead be indexing monthly? Adding new documents to the same index?
             INDEX = f"{prefix}-{datetime.now():%Y%m%d%H%M}"
 
             print(f"📤 Processing {filePath.name} → {INDEX}")

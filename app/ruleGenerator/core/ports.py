@@ -35,7 +35,7 @@ _ALLOWED_PROTO = {"tcp", "udp", "icmp"}
 # ---------------------------------------------------------------------------
 #  Main builder
 # ---------------------------------------------------------------------------
-
+#! Source or destination port
 def build_port_maps(inv: PanoramaInventory) -> "PortResolver":
     """Populate *inv* with app/service → port maps and return a resolver."""
 

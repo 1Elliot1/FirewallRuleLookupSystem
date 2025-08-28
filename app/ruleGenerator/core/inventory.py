@@ -340,7 +340,7 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
         return tuple(
             name
             for net, name in self._nets
-            if net.version == parent.version and net != parent and net.subnet_of(parent)
+            if net.version == parent.version and net.subnet_of(parent)
         )
     # ----------------------------------------------------------------
     #  Application / service group helpers

@@ -193,6 +193,7 @@ def _apply_address_objects(inv: PanoramaInventory, blob: dict) -> None:
             inv.addressObjectByName[name] = AddressObject(name=name, value=cidr)
             _add_to_nets(inv, name, cidr)
 
+        #TODO: If you include an IP of an existing addressObject with different name, the old addressObject remains along with the new one of a different name. Both have the same IP. Is this the desired funtionality? Or do you want to overwrite based on address value?
         def overwrite():
             inv.addressObjectByName[name].value = cidr
             _add_to_nets(inv, name, cidr, replace=True)
