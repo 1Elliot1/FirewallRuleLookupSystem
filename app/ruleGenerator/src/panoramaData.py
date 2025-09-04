@@ -104,6 +104,13 @@ class PanoramaData(PanoramaInventory):  # type: ignore[misc]
 
     def isExternal(self, cidrList, groupList, zoneList=None):  
         return self.is_external(cidrList, groupList, zoneList)
+    
+    def vlansForZones(self, zones: List[str]) -> List[str]:  # noqa: N802
+        return self.vlans_for_zones(zones)
+
+    def cidrsForZones(self, zones: List[str]) -> List[str]:  # noqa: N802
+        return self.cidrs_for_zones(zones)
+    
 # ---------------------------------------------------------------------------
 #  Convenience re‑exports for old import paths
 # ---------------------------------------------------------------------------

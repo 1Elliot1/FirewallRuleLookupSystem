@@ -70,8 +70,62 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                     panData, _normalizeToList(getattr(rule, "destination", []))
                 )
 
+                if srcZones and not _zones_are_any(srcZones) and _should_expand_from_zones(srcObjects, srcGroups, srcCidrs):
+                    zcidrs = panData.cidrsForZones(srcZones)       # VLAN/subint CIDRs for zones
+                    zvlans  = panData.vlansForZones(srcZones)      # keep using this in doc
+
+                    # 1) Add the VLAN CIDRs themselves (dedup)
+                    for c in zcidrs:
+                        if c not in srcCidrs:
+                            srcCidrs.append(c)
+
+                    # 2) Add impacted AddressObjects: names + their own CIDRs
+                    for c in zcidrs:
+                        for name in panData.nestedObjectsInNetwork(c):
+                            if name not in srcObjects:
+                                srcObjects.append(name)
+
+                            # If we can resolve the object’s value, add its exact CIDR/IP too
+                            ao = panData.addressObjectByName.get(name)
+                            if ao and getattr(ao, "value", None):
+                                oc = _cidrOrRange(ao.value)  # same helper used in _expandAddressReferences
+                                if oc and oc not in srcCidrs:
+                                    srcCidrs.append(oc)
+
+                    # stash VLANs for the doc payload you build later
+                    srcZoneVlans = zvlans
+                else:
+                    srcZoneVlans = []
+
+                if destZones and not _zones_are_any(destZones) and _should_expand_from_zones(destObjects, destGroups, destCidrs):
+                    zcidrs = panData.cidrsForZones(destZones)       # VLAN/subint CIDRs for zones
+                    zvlans  = panData.vlansForZones(destZones)      # keep using this in doc
+
+                    # 1) Add the VLAN CIDRs themselves (dedup)
+                    for c in zcidrs:
+                        if c not in destCidrs:
+                            destCidrs.append(c)
+
+                    # 2) Add impacted AddressObjects: names + their own CIDRs
+                    for c in zcidrs:
+                        for name in panData.nestedObjectsInNetwork(c):
+                            if name not in destObjects:
+                                destObjects.append(name)
+
+                            # If we can resolve the object’s value, add its exact CIDR/IP too
+                            ao = panData.addressObjectByName.get(name)
+                            if ao and getattr(ao, "value", None):
+                                oc = _cidrOrRange(ao.value)  # same helper used in _expandAddressReferences
+                                if oc and oc not in destCidrs:
+                                    destCidrs.append(oc)
+
+                    # stash VLANs for the doc payload you build later
+                    destZoneVlans = zvlans
+                else:
+                    destZoneVlans = []
+
+
                 # ---------------- EXT/INT Flags -----------------------------
-                #! ISEXTERNAL METHOD NO LONGER EXISTS-- MUST REPLACE
                 srcIsExternal = panData.isExternal(srcCidrs, srcGroups, srcZones)
                 destIsExternal = panData.isExternal(destCidrs, destGroups, destZones)
 
@@ -103,6 +157,7 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
 
                     "source": {
                         "zones": srcZones,
+                        "zoneVlans": srcZoneVlans,
                         "address": {
                             "objects": srcObjects,
                             "groups": srcGroups,
@@ -112,6 +167,7 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                     },
                     "destination": {
                         "zones": destZones,
+                        "zoneVlans": destZoneVlans,
                         "address": {
                             "objects": destObjects,
                             "groups": destGroups,
@@ -172,6 +228,14 @@ def _normalizeToList(value) -> List[str]:
     if value is None:
         return []
     return value if isinstance(value, (list, tuple)) else [value]
+
+def _should_expand_from_zones(objects: list[str], groups: list[str], cidrs: list[str]) -> bool:
+    has_any = any(g.lower() == "any" for g in groups)
+    emptyish = (not objects and not cidrs)
+    return has_any or emptyish
+
+def _zones_are_any(zones: list[str]) -> bool:
+    return any((z or "").lower() == "any" for z in zones)
 
 def _cidrOrRange(token: str | dict | None) -> str | dict | None:
     """ 
@@ -273,15 +337,15 @@ def _expandAddressReferences(
             continue 
 
         # ── Fallback: literal token kept as a group
-        groups.add(reference)
-        seen = set()
-        deduped = []
-        for item in cidrs:
-            key = item if isinstance(item, str) else (item["gte"], item["lte"])
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        cidrs = deduped
+        groups.add(str(reference))
+    seen = set()
+    deduped = []
+    for item in cidrs:
+        key = item if isinstance(item, str) else (item["gte"], item["lte"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    cidrs = deduped
 
     return list(objects), list(groups), list(cidrs)
