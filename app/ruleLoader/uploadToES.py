@@ -81,13 +81,20 @@ def putTemplate() -> None:
     r.raise_for_status()
 
 def iterBulkLines(path: pathlib.Path, index_name: str):
-    action = json.dumps({"index": {"_index": index_name}}, separators=(",", ":"))
     with path.open("r", encoding="utf-8") as fh:
-        for doc in fh:
-            if not doc.strip():
+        for doc_line in fh:
+            if not doc_line.strip():
                 continue
+            doc = json.loads(doc_line)
+            doc_id = doc.get("uid")
+            action = json.dumps({
+                "index": {
+                    "_index": index_name,
+                    **({"_id": doc_id} if doc_id else {})
+                }
+            }, separators=(",", ":"))
             yield action + "\n"
-            yield doc if doc.endswith("\n") else doc + "\n"
+            yield doc_line if doc_line.endswith("\n") else doc_line + "\n"
 
 def esHeaders(extra: dict | None = None) -> dict:
     """
@@ -147,14 +154,7 @@ def watchForFiles():
     
     # Process any existing files first
     handler = RuleFileHandler()
-   # existingFiles = sorted(OUT_DIR.glob("ruleMetrics-*.ndjson"), key=lambda p: p.stat().st_mtime)
 
-    #! Likely culprit for the additional documents within new indexes:
-    # if existingFiles:
-    #     print(f"📁 Found {len(existingFiles)} existing files to process")
-    #     for filePath in existingFiles:
-    #         print(f"🔄 Processing existing file: {filePath.name}")
-    #         handler.processFile(filePath)
 
     # Set up file watcher
     observer = Observer()
