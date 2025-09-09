@@ -147,13 +147,14 @@ def watchForFiles():
     
     # Process any existing files first
     handler = RuleFileHandler()
-    existingFiles = sorted(OUT_DIR.glob("ruleMetrics-*.ndjson"), key=lambda p: p.stat().st_mtime)
+   # existingFiles = sorted(OUT_DIR.glob("ruleMetrics-*.ndjson"), key=lambda p: p.stat().st_mtime)
 
-    if existingFiles:
-        print(f"📁 Found {len(existingFiles)} existing files to process")
-        for filePath in existingFiles:
-            print(f"🔄 Processing existing file: {filePath.name}")
-            handler.processFile(filePath)
+    #! Likely culprit for the additional documents within new indexes:
+    # if existingFiles:
+    #     print(f"📁 Found {len(existingFiles)} existing files to process")
+    #     for filePath in existingFiles:
+    #         print(f"🔄 Processing existing file: {filePath.name}")
+    #         handler.processFile(filePath)
 
     # Set up file watcher
     observer = Observer()

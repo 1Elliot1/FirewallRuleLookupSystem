@@ -258,26 +258,131 @@ class PanoramaInventory:  # pylint: disable=too-many-instance-attributes
     #  VLAN / Zone snapshot
     # ----------------------------------------------------------------
     def _collect_vlan_data(self) -> None:
-        """Build *template‑vsys → vlanID → cidr* mapping."""
+        """Build *template-vsys → vlan/iface/zone* mapping, normalized to strings."""
         for tmpl in self.templates:
             for vsys in tmpl.findall(Vsys):
                 zones = vsys.findall(Zone)
                 agg_ifaces = tmpl.findall(AggregateInterface)
 
-                vlan_map: Dict[str, str] = {}
+                vlan_map: Dict[str, List[str]] = {}   # "123" -> ["10.10.10.0/24", ...]
+                iface_to_vlan: Dict[str, str] = {}    # "ae1.123" -> "123"
+
                 for agg in agg_ifaces:
                     for subif in agg.findall(Layer3Subinterface):
                         try:
-                            vlan, ip_cidr = subif.name.split(".")[1], subif.ip
-                            vlan_map[vlan] = ip_cidr
-                        except (IndexError, AttributeError):
-                            _LOG.warning("Cannot parse VLAN from %s", subif.name)
+                            _, vlan = subif.name.split(".", 1)
+                        except Exception:
+                            _LOG.warning("Cannot parse VLAN from %s", getattr(subif, "name", "<unknown>"))
+                            continue
+                        cidrs = self._to_cidrs_list(getattr(subif, "ip", None))
+                        if not cidrs:
+                            continue
+                        iface_to_vlan[subif.name] = vlan
+                        bucket = vlan_map.setdefault(vlan, [])
+                        bucket.extend(cidrs)
+
+                # Map zones → interfaces → VLANs → CIDRs (all strings)
+                zone_to_ifaces: Dict[str, List[str]] = {}
+                zone_to_vlans: Dict[str, List[str]] = {}
+                zone_to_cidrs: Dict[str, List[str]] = {}
+
+                for z in zones:
+                    zname = getattr(z, "name", None) or str(z)
+                    intfs = (getattr(z, "interface", None) or getattr(z, "interfaces", None) or [])
+                    if isinstance(intfs, str):
+                        intfs = [intfs]
+
+                    zone_to_ifaces[zname] = intfs
+
+                    vlans: List[str] = []
+                    cidrs: List[str] = []
+                    for iface in intfs:
+                        v = iface_to_vlan.get(iface)
+                        if v:
+                            vlans.append(v)
+                            cidrs.extend(vlan_map.get(v, []))
+
+                    # unique + sorted; all items are strings
+                    zone_to_vlans[zname] = sorted(set(vlans))
+                    zone_to_cidrs[zname] = sorted(set(cidrs))
 
                 if vlan_map:
                     key = f"{tmpl.name}-{vsys.name}"
-                    self.vlanData[key] = {"vlanMap": vlan_map, "zones": zones}
+                    self.vlanData[key] = {
+                        "vlanMap": {k: sorted(set(v)) for k, v in vlan_map.items()},
+                        "zones": [z.name for z in zones],
+                        "ifaceToVlan": iface_to_vlan,
+                        "zoneToIfaces": zone_to_ifaces,
+                        "zoneToVlans": zone_to_vlans,
+                        "zoneToCidrs": zone_to_cidrs,
+                    }
+        _LOG.info("Sample VLAN blob: %s",
+           {k: { "vlanMap": list(v["vlanMap"].keys()),
+                 "zones": v["zones"][:3] } for k, v in list(self.vlanData.items())[:1]})
 
         _LOG.info("Collected VLAN data for %d template/vsys combos", len(self.vlanData))
+
+
+    # helpers (unchanged interface; now guaranteed to return lists of strings)
+    def vlans_for_zones(self, zones: List[str]) -> List[str]:
+        out: Set[str] = set()
+        for blob in self.vlanData.values():
+            z2v = blob.get("zoneToVlans", {})
+            for z in zones:
+                out.update(z2v.get(z, []))
+        return sorted(out)
+
+    def cidrs_for_zones(self, zones: List[str]) -> List[str]:
+        out: Set[str] = set()
+        for blob in self.vlanData.values():
+            z2c = blob.get("zoneToCidrs", {})
+            for z in zones:
+                out.update(z2c.get(z, []))   # now always strings → hashable
+        return sorted(out)
+    
+    @staticmethod
+    def _to_cidrs_list(raw) -> List[str]:
+        """
+        Normalize Panorama 'ip' field into a flat list of CIDR strings.
+        Accepts: str, list/tuple of str, objects with .ip, dicts with 'ip'.
+        Ignores unparsable entries.
+        """
+        if raw is None:
+            return []
+        candidates = []
+        if isinstance(raw, str):
+            candidates = [raw]
+        elif isinstance(raw, (list, tuple, set)):
+            candidates = list(raw)
+        elif hasattr(raw, "ip"):
+            candidates = [getattr(raw, "ip")]
+        elif isinstance(raw, dict) and "ip" in raw:
+            candidates = [raw["ip"]]
+        else:
+            candidates = [raw]
+
+        out: List[str] = []
+        for val in candidates:
+            if val is None:
+                continue
+            if not isinstance(val, str):
+                # try one more level (e.g. list of objects-with-ip)
+                ipval = getattr(val, "ip", None)
+                if isinstance(ipval, str):
+                    val = ipval
+                else:
+                    continue
+            s = val.strip()
+            # single IP → /32 or /128
+            try:
+                if "/" not in s:
+                    ip = ipaddress.ip_address(s)
+                    out.append(f"{ip}/{32 if ip.version == 4 else 128}")
+                else:
+                    out.append(ipaddress.ip_network(s, strict=False).with_prefixlen)
+            except ValueError:
+                _LOG.debug("Skipping unparsable IP '%s'", s)
+        return out
 
     # ----------------------------------------------------------------
     #  Public helper methods (used by ruleDocumentBuilder & tests)
