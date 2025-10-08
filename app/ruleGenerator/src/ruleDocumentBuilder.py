@@ -214,7 +214,8 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                 doc["isShadowed"] = panData.isShadowed(doc, docs)
 
                 doc["uid"] = stable_rule_id(doc)
-                
+                doc["active"] = True
+
                 docs.append(doc)
     
     return docs
@@ -363,10 +364,19 @@ def stable_rule_id(rule: dict) -> str:
 
     def normalize_list(lst):
         # Ensure lists are sorted and unique strings
-        return sorted(set(str(i).lower() for i in lst)) if lst else []
+        if lst is None:
+            return []
+        return sorted(set(str(item).lower() for item in lst))
+    
+    def safe_lower(s):
+        # Handle None or non-string input safely
+        if s is None:
+            return ""
+        return str(s).lower()
+
 
     # Extract and normalize fields, fall back to empty if missing
-    device_group = rule.get("deviceGroup", "").lower()
+    device_group = safe_lower(rule.get("deviceGroup", ""))
 
     # Source address fields normalized into JSON string
     src_addr = rule.get("source", {}).get("address", {})
@@ -381,8 +391,8 @@ def stable_rule_id(rule: dict) -> str:
     dst_cidr = normalize_list(dst_addr.get("cidr", []))
 
     # Other key fields
-    rule_type = rule.get("ruleType", "").lower()
-    action = rule.get("action", "").lower()
+    rule_type = safe_lower(rule.get("ruleType", ""))
+    action = safe_lower(rule.get("action", ""))
     applications = normalize_list(rule.get("applications", []))
     services = normalize_list(rule.get("services", []))
 
@@ -411,7 +421,3 @@ def stable_rule_id(rule: dict) -> str:
     # Create SHA256 hash of the serialized string
     return hashlib.sha256(id_json.encode('utf-8')).hexdigest()
 
-# Example usage:
-# rule_doc = {...}  # Your full rule document
-# unique_id = stable_rule_id(rule_doc)
-# print(unique_id)

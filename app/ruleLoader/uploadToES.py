@@ -12,7 +12,7 @@ import time
 import pathlib
 import requests
 import tqdm
-from datetime import datetime
+from datetime import datetime,timedelta
 import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -22,7 +22,7 @@ ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 #TODO: Change template path to be more dynamic. Any name, args to put custom path. Same with index prefix.
 TPL_PATH = pathlib.Path(os.getenv("TPL_PATH", "/app/test_template.json"))
 OUT_DIR = pathlib.Path("/app/out")
-prefix = os.getenv("INDEX_PREFIX", "test-index")
+prefix = os.getenv("INDEX_PREFIX", "rules")
 ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY")
 
 class RuleFileHandler(FileSystemEventHandler):
@@ -57,8 +57,7 @@ class RuleFileHandler(FileSystemEventHandler):
     def processFile(self, filePath: pathlib.Path):
         try:
             # Create index name with timestamp
-            #! Here you are creating an index based on the minute. This results in oversharding over time. Are there any downsides or complications to instead be indexing monthly? Adding new documents to the same index?
-            INDEX = f"{prefix}-{datetime.now():%Y%m%d%H%M}"
+            INDEX = f"{prefix}-current"
 
             print(f"📤 Processing {filePath.name} → {INDEX}")
 
@@ -74,7 +73,7 @@ class RuleFileHandler(FileSystemEventHandler):
 def putTemplate() -> None:
     tpl = json.load(TPL_PATH.open(encoding="utf-8"))
     r = requests.put(
-        f"{ES_HOST}/_index_template/test_template",
+        f"{ES_HOST}/_index_template/rules_template",
         json=tpl,
         headers=esHeaders({"Content-Type": "application/json"})
     )
@@ -87,14 +86,19 @@ def iterBulkLines(path: pathlib.Path, index_name: str):
                 continue
             doc = json.loads(doc_line)
             doc_id = doc.get("uid")
-            action = json.dumps({
-                "index": {
+            action = {
+                "update": {
                     "_index": index_name,
                     **({"_id": doc_id} if doc_id else {})
                 }
-            }, separators=(",", ":"))
-            yield action + "\n"
-            yield doc_line if doc_line.endswith("\n") else doc_line + "\n"
+            }
+            yield json.dumps(action, separators=(",", ":")) + "\n"
+
+            upsert_body = {
+                "doc": doc,
+                "doc_as_upsert": True
+            }
+            yield json.dumps(upsert_body, separators=(",", ":")) + "\n"
 
 def esHeaders(extra: dict | None = None) -> dict:
     """
@@ -147,6 +151,8 @@ def bulkLoad(ndjson_path: pathlib.Path, index_name: str) -> None:
     
     took = resp.get("took", "?")
     print(f"✔︎  Loaded {total_docs:,} docs into {index_name} (took {took} ms)")
+    print("Querying for Inactive rules...")
+    mark_inactive_rules(index_name)
 
 def watchForFiles():
     """Watch for new rule files and process them automatically"""
@@ -179,7 +185,7 @@ def processLatestFile():
         sys.exit(0)
     
     ndjsonPath = candidates[0]
-    INDEX = f"{prefix}-{datetime.now():%Y%m%d%H%M}"
+    INDEX = f"{prefix}-current"
 
     print(f"📤 Processing latest file: {ndjsonPath.name} → {INDEX}")
 
@@ -207,3 +213,30 @@ if __name__ == "__main__":
                 print(f"⚠️  Failed to delete old indices: {e}")
 
         processLatestFile()
+
+def mark_inactive_rules(index_name: str):
+    # Define cutoff time: now minus 1 day (ISO format)
+    cutoff = (NOW - timedelta(days=1)).isoformat() + "Z"
+
+    query = {
+        "script": {
+            "source": "ctx._source.active = false",
+            "lang": "painless"
+        },
+        "query": {
+            "range": {
+                "snapshotTimestamp": {
+                    "lt": cutoff
+                }
+            }
+        }
+    }
+    r = requests.post(
+        f"{ES_HOST}/{index_name}/_update_by_query",
+        json=query,
+        headers=esHeaders({"Content-Type": "application/json"}),
+        params={"refresh": "true"}
+    )
+    r.raise_for_status()
+    print(f"Marked as inactive all rules in {index_name} with snapshotTimestamp older than {cutoff}")
+    print(f"Query Results: {r.json()}")
