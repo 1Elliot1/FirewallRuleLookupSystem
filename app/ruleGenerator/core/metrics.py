@@ -231,18 +231,34 @@ def _token_covered_by_sup(token, sup_token) -> bool:
     # token/sup_token ∈ { "CIDR string" | {"gte": ip, "lte": ip} }
     try:
         if isinstance(sup_token, dict):
-            # parent is a range → it only covers if child's entire range/net is inside it
+            # parent is a RANGE
+            lo = ipaddress.ip_address(sup_token["gte"])
+            hi = ipaddress.ip_address(sup_token["lte"])
+            if lo.version != hi.version or lo > hi:
+                return False
             if isinstance(token, dict):
-                return ipaddress.ip_address(token["gte"]) >= ipaddress.ip_address(sup_token["gte"]) and \
-                       ipaddress.ip_address(token["lte"]) <= ipaddress.ip_address(sup_token["lte"])
+                # child is RANGE: child range must lie fully within parent range
+                clo = ipaddress.ip_address(token["gte"])
+                chi = ipaddress.ip_address(token["lte"])
+                return (clo.version == lo.version == hi.version) and (lo <= clo <= chi <= hi)
             else:
+                # child is CIDR: net's first & last IP must lie within parent range
                 net = ipaddress.ip_network(token, strict=False)
-                return _range_in_net(sup_token["gte"], sup_token["lte"], net)  # parent range inside child net? invert
+                first = net.network_address
+                last  = net.broadcast_address
+                return (first.version == lo.version) and (lo <= first and last <= hi)
         else:
+            # parent is a CIDR
             parent_net = ipaddress.ip_network(sup_token, strict=False)
             if isinstance(token, dict):
-                return _range_in_net(token["gte"], token["lte"], parent_net)
+                clo = ipaddress.ip_address(token["gte"])
+                chi = ipaddress.ip_address(token["lte"])
+                if clo.version != parent_net.version or chi.version != parent_net.version or clo > chi:
+                    return False
+                # child range must be fully inside parent net
+                return (clo in parent_net) and (chi in parent_net)
             else:
+                # child is CIDR: subset check
                 child_net = ipaddress.ip_network(token, strict=False)
                 return child_net.version == parent_net.version and child_net.subnet_of(parent_net)
     except Exception:
@@ -291,6 +307,6 @@ __all__ = [
     "RuleMetricsCollector",
     "calc_rule_weight",
     "is_shadowed",
-    "_subset",
+    "_subset_anyaware",
     "_cidrs_cover",
 ]

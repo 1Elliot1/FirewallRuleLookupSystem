@@ -17,7 +17,7 @@ import threading
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-NOW = datetime.now()
+
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 #TODO: Change template path to be more dynamic. Any name, args to put custom path. Same with index prefix.
 TPL_PATH = pathlib.Path(os.getenv("TPL_PATH", "/app/test_template.json"))
@@ -143,10 +143,10 @@ def bulkLoad(ndjson_path: pathlib.Path, index_name: str) -> None:
     
     resp = r.json()
     if resp.get("errors"):
-        fails = [item for item in resp["items"] if item["index"].get("error")]
+        fails = [item for item in resp["items"] if item["update"].get("error")]
         print(f"⚠️  {len(fails)} docs failed (showing first 5):", file=sys.stderr)
         for item in fails[:5]:
-            print(json.dumps(item["index"]["error"], indent=2), file=sys.stderr)
+            print(json.dumps(item["update"]["error"], indent=2), file=sys.stderr)
         return
     
     took = resp.get("took", "?")
@@ -215,6 +215,7 @@ if __name__ == "__main__":
         processLatestFile()
 
 def mark_inactive_rules(index_name: str):
+    NOW = datetime.now()
     # Define cutoff time: now minus 1 day (ISO format)
     cutoff = (NOW - timedelta(days=1)).isoformat() + "Z"
 
