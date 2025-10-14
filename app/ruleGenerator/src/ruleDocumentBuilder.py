@@ -213,6 +213,9 @@ def buildRuleDocuments(panData: "PanoramaData") -> List[Dict]:
                 doc["ruleWeight"] = panData.calcRuleWeight(doc)
                 doc["isShadowed"] = panData.isShadowed(doc, docs)
 
+                doc["uid"] = stable_rule_id(doc)
+                doc["active"] = True
+
                 docs.append(doc)
     
     return docs
@@ -349,3 +352,72 @@ def _expandAddressReferences(
     cidrs = deduped
 
     return list(objects), list(groups), list(cidrs)
+
+import hashlib
+import json
+
+def stable_rule_id(rule: dict) -> str:
+    """
+    Generate a stable unique ID for a firewall rule document.
+    Handles lists (sorted, deduplicated) and nested structures.
+    """
+
+    def normalize_list(lst):
+        # Ensure lists are sorted and unique strings
+        if lst is None:
+            return []
+        return sorted(set(str(item).lower() for item in lst))
+    
+    def safe_lower(s):
+        # Handle None or non-string input safely
+        if s is None:
+            return ""
+        return str(s).lower()
+
+
+    # Extract and normalize fields, fall back to empty if missing
+    device_group = safe_lower(rule.get("deviceGroup", ""))
+
+    # Source address fields normalized into JSON string
+    src_addr = rule.get("source", {}).get("address", {})
+    src_objects = normalize_list(src_addr.get("objects", []))
+    src_groups = normalize_list(src_addr.get("groups", []))
+    src_cidr = normalize_list(src_addr.get("cidr", []))
+
+    # Destination address fields normalized
+    dst_addr = rule.get("destination", {}).get("address", {})
+    dst_objects = normalize_list(dst_addr.get("objects", []))
+    dst_groups = normalize_list(dst_addr.get("groups", []))
+    dst_cidr = normalize_list(dst_addr.get("cidr", []))
+
+    # Other key fields
+    rule_type = safe_lower(rule.get("ruleType", ""))
+    action = safe_lower(rule.get("action", ""))
+    applications = normalize_list(rule.get("applications", []))
+    services = normalize_list(rule.get("services", []))
+
+    # Compose a canonical dictionary of normalized contents
+    id_data = {
+        "deviceGroup": device_group,
+        "source": {
+            "objects": src_objects,
+            "groups": src_groups,
+            "cidr": src_cidr
+        },
+        "destination": {
+            "objects": dst_objects,
+            "groups": dst_groups,
+            "cidr": dst_cidr
+        },
+        "ruleType": rule_type,
+        "action": action,
+        "applications": applications,
+        "services": services
+    }
+
+    # Serialize with sorted keys for consistent hashing
+    id_json = json.dumps(id_data, sort_keys=True, separators=(',', ':'))
+
+    # Create SHA256 hash of the serialized string
+    return hashlib.sha256(id_json.encode('utf-8')).hexdigest()
+

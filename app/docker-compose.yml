@@ -58,7 +58,7 @@ services:
     environment:
       - ES_HOST=http://elasticsearch:9200
       - ELASTIC_API_KEY=${ELASTIC_API_KEY}
-      - INDEX_PREFIX=test-index
+      - INDEX_PREFIX=rules
     restart: unless-stopped
 
 volumes:
