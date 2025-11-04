@@ -39,6 +39,8 @@ services:
     environment:
       - PAN_ADDRESS=${PAN_ADDRESS}
       - API_KEY=${API_KEY}
+      - CRON_SCHEDULE=20 * * * *
+      - OUT_DIR=/app/out
     restart: unless-stopped
     logging:
       driver: "json-file"
